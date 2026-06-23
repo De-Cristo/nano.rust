@@ -42,6 +42,7 @@ pub enum Output {
     Diff(DiffReport),
     Repair(RepairReport),
     Run(RunReport),
+    Dataset(DatasetReport),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -180,6 +181,13 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DatasetReport {
+    pub status: Status,
+    pub command: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CliError {
     pub status: ErrorStatus,
     pub kind: ErrorKind,
@@ -210,6 +218,7 @@ pub enum ErrorKind {
     Interpret,
     Kernel,
     Workflow,
+    Dataset,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -266,6 +275,7 @@ where
         Command::Diff { spec_a, spec_b } => diff_command(&spec_a, &spec_b),
         Command::Repair { spec, apply } => repair_command(&spec, apply),
         Command::Run(options) => run_workflow(options).map(Output::Run),
+        Command::Dataset(options) => dataset_command(options),
     }
 }
 
@@ -413,6 +423,7 @@ pub fn render_text(output: &Output) -> String {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "(not written)".to_string())
         ),
+        Output::Dataset(report) => format!("OK dataset {}\n{}", report.command, report.message),
     }
 }
 
@@ -1334,6 +1345,20 @@ enum Command {
     Diff { spec_a: PathBuf, spec_b: PathBuf },
     Repair { spec: PathBuf, apply: bool },
     Run(WorkflowRunOptions),
+    Dataset(DatasetCommandOptions),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DatasetCommandOptions {
+    Resolve {
+        dataset: String,
+        max_files: Option<usize>,
+        output: PathBuf,
+        instance: nano_das::DasInstance,
+    },
+    Inspect {
+        manifest: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1374,6 +1399,7 @@ impl ParsedArgs {
             }
             "repair" => parse_repair_args(&positional[1..])?,
             "run" => Command::Run(parse_run_args(&positional[1..])?),
+            "dataset" => Command::Dataset(parse_dataset_args(&positional[1..])?),
             _ => return Err(usage_error(format!("unknown command `{command}`"))),
         };
         Ok(Self { command })
@@ -1635,4 +1661,150 @@ fn format_validation_state(state: &nano_review::ValidationState) -> String {
         return error.clone();
     }
     state.validation_errors.join("; ")
+}
+
+fn parse_dataset_args(args: &[String]) -> Result<DatasetCommandOptions> {
+    if args.is_empty() {
+        return Err(usage_error(
+            "`nano dataset` requires a subcommand (resolve, inspect)",
+        ));
+    }
+    match args[0].as_str() {
+        "resolve" => {
+            let mut dataset = None;
+            let mut max_files = None;
+            let mut output = None;
+            let mut instance = nano_das::DasInstance::ProdGlobal;
+
+            let mut index = 1;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--dataset" => {
+                        dataset = Some(flag_value(args, index, "--dataset")?.to_string());
+                        index += 2;
+                    }
+                    "--max-files" => {
+                        let val = flag_value(args, index, "--max-files")?;
+                        max_files = Some(
+                            val.parse::<usize>()
+                                .map_err(|_| usage_error("invalid --max-files"))?,
+                        );
+                        index += 2;
+                    }
+                    "--output" => {
+                        output = Some(PathBuf::from(flag_value(args, index, "--output")?));
+                        index += 2;
+                    }
+                    "--instance" => {
+                        let val = flag_value(args, index, "--instance")?;
+                        instance = match val {
+                            "prod/global" => nano_das::DasInstance::ProdGlobal,
+                            "prod/phys03" => nano_das::DasInstance::ProdPhys03,
+                            s => nano_das::DasInstance::Custom(s.to_string()),
+                        };
+                        index += 2;
+                    }
+                    flag if flag.starts_with("--") => {
+                        return Err(usage_error(format!(
+                            "unknown `nano dataset resolve` flag `{flag}`"
+                        )));
+                    }
+                    operand => {
+                        return Err(usage_error(format!("unexpected argument `{operand}`")));
+                    }
+                }
+            }
+
+            let dataset = dataset.ok_or_else(|| usage_error("missing --dataset"))?;
+            let output = output.ok_or_else(|| usage_error("missing --output"))?;
+
+            Ok(DatasetCommandOptions::Resolve {
+                dataset,
+                max_files,
+                output,
+                instance,
+            })
+        }
+        "inspect" => {
+            if args.len() != 2 {
+                return Err(usage_error(
+                    "`nano dataset inspect` requires exactly one manifest path",
+                ));
+            }
+            Ok(DatasetCommandOptions::Inspect {
+                manifest: PathBuf::from(&args[1]),
+            })
+        }
+        sub => return Err(usage_error(format!("unknown dataset subcommand `{sub}`"))),
+    }
+}
+
+fn dataset_command(options: DatasetCommandOptions) -> Result<Output> {
+    match options {
+        DatasetCommandOptions::Resolve {
+            dataset,
+            max_files,
+            output,
+            instance,
+        } => {
+            let request = nano_das::DatasetRequest {
+                dataset,
+                instance,
+                max_files,
+                run_range: None,
+                require_valid: true,
+            };
+            let resolver = nano_das::DasgoClientResolver;
+            use nano_das::DatasetResolver;
+            let manifest = resolver.resolve(&request).map_err(|e| CliError {
+                status: ErrorStatus::Error,
+                kind: ErrorKind::Dataset,
+                message: format!("DAS resolve failed: {}", e),
+                spec_path: None,
+                validation_errors: vec![],
+            })?;
+            manifest.write_json(&output).map_err(|e| CliError {
+                status: ErrorStatus::Error,
+                kind: ErrorKind::Dataset,
+                message: format!("Failed to write manifest: {}", e),
+                spec_path: None,
+                validation_errors: vec![],
+            })?;
+            Ok(Output::Dataset(DatasetReport {
+                status: Status::Ok,
+                command: "resolve".to_string(),
+                message: format!(
+                    "Resolved {} files to {}",
+                    manifest.files.len(),
+                    output.display()
+                ),
+            }))
+        }
+        DatasetCommandOptions::Inspect { manifest } => {
+            let m = nano_das::DatasetManifest::read_json(&manifest).map_err(|e| CliError {
+                status: ErrorStatus::Error,
+                kind: ErrorKind::Dataset,
+                message: format!("Failed to read manifest: {}", e),
+                spec_path: None,
+                validation_errors: vec![],
+            })?;
+            let mut lines = vec![
+                format!("Dataset: {}", m.dataset),
+                format!("Instance: {}", m.instance),
+                format!("Files: {}", m.files.len()),
+                format!("Resolver: {}", m.provenance.resolver),
+            ];
+            for file in m.files.iter().take(5) {
+                lines.push(format!("  - {}", file.lfn));
+            }
+            if m.files.len() > 5 {
+                lines.push(format!("  ... and {} more", m.files.len() - 5));
+            }
+            Ok(Output::Dataset(DatasetReport {
+                status: Status::Ok,
+                command: "inspect".to_string(),
+                message: lines.join("\n"),
+            }))
+        }
+    }
 }
