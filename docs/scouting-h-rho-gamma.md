@@ -36,10 +36,10 @@ An optional third positional argument supplies a config path:
 cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
 ```
 
-Optional CSV output writes every accepted H candidate:
+Optional CSV and ROOT output writes every accepted H candidate:
 
 ```bash
-cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv
+cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv --root candidates.root
 ```
 
 If no config path is supplied, the example loads

@@ -10,6 +10,7 @@ use nano_io::scouting_hrhogamma::{
     load_branch_mapping, reconstruct_event, EventInputs, HCand, HToRhoGammaBranchMapping,
     HToRhoGammaCuts,
 };
+use nano_io::writer::{write_events, OutputBranch};
 
 const ENV_INPUT: &str = "NANO_SCOUTING_HRHOGAMMA_FILE";
 const DEFAULT_CONFIG_PATH: &str = "configs/scouting/h_rho_gamma.toml";
@@ -25,6 +26,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (cuts, cut_source, mapping, mapping_source) = load_config(&options)?;
     let schema = scouting_schema(&mapping)?;
+    let mut root_writer = options
+        .root_path
+        .as_deref()
+        .map(|_| CandidateRootWriter::default());
     let mut csv_writer = options
         .csv_path
         .as_deref()
@@ -37,6 +42,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         "candidate_output: {}",
         options
             .csv_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!(
+        "root_output: {}",
+        options
+            .root_path
             .as_deref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "none".to_string())
@@ -81,7 +94,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mapping,
         options.max_events,
         csv_writer.as_mut(),
+        root_writer.as_mut(),
     )?;
+
+    if let (Some(mut writer), Some(path)) = (root_writer, options.root_path.as_deref()) {
+        writer.save(path)?;
+    }
     print_report(&report);
     Ok(())
 }
@@ -94,12 +112,14 @@ struct Options {
     config_display: String,
     config_explicit: bool,
     csv_path: Option<PathBuf>,
+    root_path: Option<PathBuf>,
 }
 
 impl Options {
     fn parse() -> Result<Option<Self>, Box<dyn Error>> {
         let mut positional = Vec::new();
         let mut csv_path = None;
+        let mut root_path = None;
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -108,6 +128,10 @@ impl Options {
                 "--csv" => {
                     let value = args.next().ok_or("missing value after --csv")?;
                     csv_path = Some(PathBuf::from(value));
+                }
+                "--root" => {
+                    let value = args.next().ok_or("missing value after --root")?;
+                    root_path = Some(PathBuf::from(value));
                 }
                 _ if arg.starts_with("--") => {
                     return Err(format!("unknown option: {arg}").into());
@@ -118,7 +142,7 @@ impl Options {
 
         if positional.len() > 3 {
             return Err(
-                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv]".into(),
+                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]".into(),
             );
         }
 
@@ -166,12 +190,13 @@ impl Options {
             config_display,
             config_explicit,
             csv_path,
+            root_path,
         }))
     }
 }
 
 fn print_usage() {
-    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv]");
+    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]");
     println!("or set {ENV_INPUT}=<input.root>");
     println!("default config: {DEFAULT_CONFIG_PATH}");
 }
@@ -241,6 +266,7 @@ fn analyze(
     mapping: &HToRhoGammaBranchMapping,
     max_events: Option<usize>,
     mut csv_writer: Option<&mut CandidateCsvWriter>,
+    mut root_writer: Option<&mut CandidateRootWriter>,
 ) -> Result<Report, Box<dyn Error>> {
     let mut report = Report::default();
     let events = events_chunked(input, schema, CHUNK_SIZE)?;
@@ -360,6 +386,9 @@ fn analyze(
 
         if let Some(writer) = csv_writer.as_deref_mut() {
             writer.write_candidate(&candidate)?;
+        }
+        if let Some(writer) = root_writer.as_deref_mut() {
+            writer.write_candidate(&candidate);
         }
 
         if report.candidates.len() < MAX_PRINTED_CANDIDATES {
@@ -548,4 +577,101 @@ impl CandidateCsvWriter {
 
 fn candidate_csv_header() -> &'static str {
     "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt"
+}
+
+#[derive(Debug, Default)]
+struct CandidateRootWriter {
+    run: Vec<u32>,
+    luminosity_block: Vec<u32>,
+    event: Vec<u64>,
+    photon_pt: Vec<f32>,
+    photon_eta: Vec<f32>,
+    photon_phi: Vec<f32>,
+    pi_plus_pt: Vec<f32>,
+    pi_plus_eta: Vec<f32>,
+    pi_plus_phi: Vec<f32>,
+    pi_minus_pt: Vec<f32>,
+    pi_minus_eta: Vec<f32>,
+    pi_minus_phi: Vec<f32>,
+    rho_mass: Vec<f32>,
+    rho_pt: Vec<f32>,
+    rho_eta: Vec<f32>,
+    rho_phi: Vec<f32>,
+    h_mass: Vec<f32>,
+    h_pt: Vec<f32>,
+    h_eta: Vec<f32>,
+    h_phi: Vec<f32>,
+    delta_r_pipi: Vec<f32>,
+    delta_r_gamma_rho: Vec<f32>,
+    rho_pt_over_photon_pt: Vec<f32>,
+}
+
+impl CandidateRootWriter {
+    fn write_candidate(&mut self, candidate: &CandidateSummary) {
+        let h = &candidate.h;
+        self.run.push(candidate.run);
+        self.luminosity_block.push(candidate.luminosity_block);
+        self.event.push(candidate.event);
+        self.photon_pt.push(h.gamma.pt as f32);
+        self.photon_eta.push(h.gamma.eta as f32);
+        self.photon_phi.push(h.gamma.phi as f32);
+        self.pi_plus_pt.push(h.rho.pi_plus.pt as f32);
+        self.pi_plus_eta.push(h.rho.pi_plus.eta as f32);
+        self.pi_plus_phi.push(h.rho.pi_plus.phi as f32);
+        self.pi_minus_pt.push(h.rho.pi_minus.pt as f32);
+        self.pi_minus_eta.push(h.rho.pi_minus.eta as f32);
+        self.pi_minus_phi.push(h.rho.pi_minus.phi as f32);
+        self.rho_mass.push(h.rho.mass as f32);
+        self.rho_pt.push(h.rho.pt as f32);
+        self.rho_eta.push(h.rho.eta as f32);
+        self.rho_phi.push(h.rho.phi as f32);
+        self.h_mass.push(h.mass as f32);
+        self.h_pt.push(h.pt as f32);
+        self.h_eta.push(h.eta as f32);
+        self.h_phi.push(h.phi as f32);
+        self.delta_r_pipi.push(h.rho.pipi_delta_r as f32);
+        self.delta_r_gamma_rho
+            .push(candidate.gamma_rho_delta_r as f32);
+        self.rho_pt_over_photon_pt
+            .push(candidate.rho_over_gamma_pt as f32);
+    }
+
+    fn save(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        let branches = vec![
+            OutputBranch::u32("run", std::mem::take(&mut self.run)),
+            OutputBranch::u32(
+                "luminosityBlock",
+                std::mem::take(&mut self.luminosity_block),
+            ),
+            OutputBranch::u64("event", std::mem::take(&mut self.event)),
+            OutputBranch::f32("photon_pt", std::mem::take(&mut self.photon_pt)),
+            OutputBranch::f32("photon_eta", std::mem::take(&mut self.photon_eta)),
+            OutputBranch::f32("photon_phi", std::mem::take(&mut self.photon_phi)),
+            OutputBranch::f32("pi_plus_pt", std::mem::take(&mut self.pi_plus_pt)),
+            OutputBranch::f32("pi_plus_eta", std::mem::take(&mut self.pi_plus_eta)),
+            OutputBranch::f32("pi_plus_phi", std::mem::take(&mut self.pi_plus_phi)),
+            OutputBranch::f32("pi_minus_pt", std::mem::take(&mut self.pi_minus_pt)),
+            OutputBranch::f32("pi_minus_eta", std::mem::take(&mut self.pi_minus_eta)),
+            OutputBranch::f32("pi_minus_phi", std::mem::take(&mut self.pi_minus_phi)),
+            OutputBranch::f32("rho_mass", std::mem::take(&mut self.rho_mass)),
+            OutputBranch::f32("rho_pt", std::mem::take(&mut self.rho_pt)),
+            OutputBranch::f32("rho_eta", std::mem::take(&mut self.rho_eta)),
+            OutputBranch::f32("rho_phi", std::mem::take(&mut self.rho_phi)),
+            OutputBranch::f32("h_mass", std::mem::take(&mut self.h_mass)),
+            OutputBranch::f32("h_pt", std::mem::take(&mut self.h_pt)),
+            OutputBranch::f32("h_eta", std::mem::take(&mut self.h_eta)),
+            OutputBranch::f32("h_phi", std::mem::take(&mut self.h_phi)),
+            OutputBranch::f32("delta_r_pipi", std::mem::take(&mut self.delta_r_pipi)),
+            OutputBranch::f32(
+                "delta_r_gamma_rho",
+                std::mem::take(&mut self.delta_r_gamma_rho),
+            ),
+            OutputBranch::f32(
+                "rho_pt_over_photon_pt",
+                std::mem::take(&mut self.rho_pt_over_photon_pt),
+            ),
+        ];
+        write_events(path, &branches)?;
+        Ok(())
+    }
 }

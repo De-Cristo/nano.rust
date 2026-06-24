@@ -3,8 +3,8 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-usage: scripts/demo_scouting_hrhogamma.sh <input.root> [max-events] [config.toml] [--csv candidates.csv]
-   or: NANO_SCOUTING_HRHOGAMMA_FILE=<input.root> scripts/demo_scouting_hrhogamma.sh [--csv candidates.csv]
+usage: scripts/demo_scouting_hrhogamma.sh <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]
+   or: NANO_SCOUTING_HRHOGAMMA_FILE=<input.root> scripts/demo_scouting_hrhogamma.sh [--csv candidates.csv] [--root candidates.root]
 USAGE
 }
 
@@ -18,6 +18,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 
 positional=()
 csv=""
+root_file=""
 while (( $# > 0 )); do
   case "$1" in
     --csv)
@@ -26,7 +27,16 @@ while (( $# > 0 )); do
         printf 'error: missing value after --csv\n' >&2
         exit 2
       fi
-      csv="$1"
+        csv="$1"
+      shift
+      ;;
+    --root)
+      shift
+      if [[ -z "${1:-}" ]]; then
+        printf 'error: missing value after --root\n' >&2
+        exit 2
+      fi
+      root_file="$1"
       shift
       ;;
     --*)
@@ -68,6 +78,9 @@ if [[ -n "$config" ]]; then
 fi
 if [[ -n "$csv" ]]; then
   cmd+=(--csv "$csv")
+fi
+if [[ -n "$root_file" ]]; then
+  cmd+=(--root "$root_file")
 fi
 
 cd "$repo_root"
