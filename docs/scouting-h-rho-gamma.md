@@ -144,6 +144,62 @@ delta_r_gamma_rho
 rho_pt_over_photon_pt
 ```
 
+## CSV Validation and Quick Plots
+
+Stage 8 adds a lightweight validation script that consumes the candidate CSV
+from the Rust example and writes a summary plus simple sanity plots. This is a
+reproducibility aid for checking the demo output, not a statistical analysis or
+physics-category implementation.
+
+First generate a candidate CSV:
+
+```bash
+scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv /tmp/scouting_hrhogamma_candidates.csv
+```
+
+Then summarize and plot it:
+
+```bash
+python scripts/plot_scouting_hrhogamma_csv.py /tmp/scouting_hrhogamma_candidates.csv --outdir /tmp/scouting_hrhogamma_plots
+```
+
+The script always writes:
+
+```text
+summary.txt
+```
+
+The summary includes the input CSV path, candidate row count, unique event
+count, duplicate `run/luminosityBlock/event` entries, and min/mean/max for:
+
+```text
+h_mass
+rho_mass
+photon_pt
+rho_pt
+delta_r_pipi
+delta_r_gamma_rho
+rho_pt_over_photon_pt
+```
+
+If `matplotlib` is available, the script also writes one PNG histogram per
+quantity:
+
+```text
+h_mass.png
+rho_mass.png
+photon_pt.png
+rho_pt.png
+delta_r_pipi.png
+delta_r_gamma_rho.png
+rho_pt_over_photon_pt.png
+```
+
+If `matplotlib` is not installed, `summary.txt` is still written and the script
+prints a clear message that plots were skipped. Use `--no-plots` to force
+summary-only mode. Use `--max-rows N` to inspect only the first `N` candidate
+rows.
+
 ## Branch Mapping
 
 The branch catalogue is in `configs/branches/scouting_run3.yaml`. The current
@@ -187,8 +243,8 @@ rho_mass_target = 0.77526
 higgs_mass_reference = 125.0
 ```
 
-The example currently keeps these values as local constants so that the demo is
-self-contained fallback values. At runtime, it loads the same values from the
+The library keeps these values as built-in fallback values so that the demo
+remains self-contained when the default config is absent. At runtime, it loads the same values from the
 config by default and prints:
 
 ```text
@@ -230,8 +286,10 @@ stored `PFCand_mass`. The source mass is printed only as a diagnostic.
   reduced HLT scouting object content.
 - There is no truth matching or generator-level validation.
 - There are no jet, L1, trigger-efficiency, isolation, or category studies.
-- There is no ROOT output, histogram output, workflow integration, DAS
-  integration, or native xrootd reading in this demo.
+- There is no ROOT output, analysis-grade histogram output, workflow
+  integration, DAS integration, or native xrootd reading in this demo.
+- The Python plots are sanity-check histograms over the Stage 7 CSV, not a
+  replacement for an analysis histogramming workflow.
 - Track-quality cuts using `dz`, `dxy`, or object quality flags are deferred
   because those branches were not part of the confirmed local branch set.
 - The example uses explicit branch names rather than loading the TOML/YAML
@@ -243,7 +301,7 @@ stored `PFCand_mass`. The source mass is printed only as a diagnostic.
   configuration for the example.
 - Move candidate-building helpers into reusable library code if another stage
   needs tests around the physics objects.
-- Add optional histograms or structured output after the print-only behavior is
+- Add analysis-grade histogram output after the CSV sanity-check layer is
   validated.
 - Add truth matching and generator-level validation as a separate, explicit
   physics-validation stage.
