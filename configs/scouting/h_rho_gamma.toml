@@ -10,6 +10,22 @@ era = "Run3"
 channel = "HToRhoGamma"
 branch_catalogue = "configs/branches/scouting_run3.yaml"
 
+[baseline.zcountinghlt_naive]
+# Naive cut-based baseline translated from ZCountingHLT/python/higgs_rho_cfg.py.
+# The current print-only example keeps these values as local constants and this
+# block records their semantic source for reproducibility.
+photon_min_pt = 15.0
+pi1_min_pt = 5.0
+pi2_min_pt = 2.0
+max_delta_r_pipi = 0.1
+rho_mass_min = 0.3
+rho_mass_max = 1.2
+min_delta_r_gamma_rho = 1.0
+max_delta_r_gamma_rho = 5.0
+pion_mass = 0.13957039
+rho_mass_target = 0.77526
+higgs_mass_reference = 125.0
+
 [dataset.signal]
 name = "ggH_HToRhoGamma_Run3NanoAODv15"
 dataset = "/GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM"
