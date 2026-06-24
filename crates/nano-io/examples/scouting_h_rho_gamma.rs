@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
-use nano_io::scouting_hrhogamma::{reconstruct_event, EventInputs, HCand, HToRhoGammaCuts};
+use nano_io::scouting_hrhogamma::{
+    load_branch_mapping, reconstruct_event, EventInputs, HCand, HToRhoGammaBranchMapping,
+    HToRhoGammaCuts,
+};
 
 const ENV_INPUT: &str = "NANO_SCOUTING_HRHOGAMMA_FILE";
 const DEFAULT_CONFIG_PATH: &str = "configs/scouting/h_rho_gamma.toml";
@@ -20,8 +23,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    let schema = scouting_schema()?;
-    let (cuts, cut_source) = load_cuts(&options)?;
+    let (cuts, cut_source, mapping, mapping_source) = load_config(&options)?;
+    let schema = scouting_schema(&mapping)?;
     let mut csv_writer = options
         .csv_path
         .as_deref()
@@ -39,7 +42,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or_else(|| "none".to_string())
     );
     println!("branch_schema: ok");
-    println!("branch_mapping: ScoutingPhoton=Photon_*, ScoutingChargedCandidate=PFCand_*");
+    println!("branch_catalogue_source: {mapping_source}");
+    println!(
+        "branch_mapping: {}({}, {}, {}, {}), {}({}, {}, {}, {}, {}, {})",
+        mapping.photon.semantic_name,
+        mapping.photon.count,
+        mapping.photon.pt,
+        mapping.photon.eta,
+        mapping.photon.phi,
+        mapping.charged_candidate.semantic_name,
+        mapping.charged_candidate.count,
+        mapping.charged_candidate.pt,
+        mapping.charged_candidate.eta,
+        mapping.charged_candidate.phi,
+        mapping.charged_candidate.pdg_id,
+        mapping.charged_candidate.mass.as_deref().unwrap_or("none")
+    );
     println!(
         "constants: m_pi_charged={:.8} m_rho_target={:.5} m_higgs_reference={:.1}",
         cuts.pion_mass, cuts.rho_mass_target, cuts.higgs_mass_reference
@@ -60,6 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &options.input,
         &schema,
         &cuts,
+        &mapping,
         options.max_events,
         csv_writer.as_mut(),
     )?;
@@ -171,10 +190,15 @@ fn workspace_default_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
 }
 
-fn load_cuts(options: &Options) -> Result<(HToRhoGammaCuts, String), Box<dyn Error>> {
+fn load_config(
+    options: &Options,
+) -> Result<(HToRhoGammaCuts, String, HToRhoGammaBranchMapping, String), Box<dyn Error>> {
     if options.config_path.exists() {
         let cuts = HToRhoGammaCuts::from_config_path(&options.config_path)?;
-        return Ok((cuts, format!("{} {BASELINE_TABLE}", options.config_display)));
+        let cut_source = format!("{} {}", options.config_display, BASELINE_TABLE);
+
+        let (mapping_source, mapping) = load_branch_mapping(&options.config_path)?;
+        return Ok((cuts, cut_source, mapping, mapping_source));
     }
 
     if options.config_explicit {
@@ -184,31 +208,37 @@ fn load_cuts(options: &Options) -> Result<(HToRhoGammaCuts, String), Box<dyn Err
     Ok((
         HToRhoGammaCuts::zcountinghlt_naive(),
         "built-in zcountinghlt_naive fallback".to_string(),
+        HToRhoGammaBranchMapping::zcountinghlt_naive(),
+        "built-in scouting_run3 fallback".to_string(),
     ))
 }
 
-fn scouting_schema() -> Result<BranchSchema, Box<dyn Error>> {
-    Ok(BranchSchema::new([
+fn scouting_schema(mapping: &HToRhoGammaBranchMapping) -> Result<BranchSchema, Box<dyn Error>> {
+    let mut specs = vec![
         BranchSpec::new("run", BranchType::U32),
         BranchSpec::new("luminosityBlock", BranchType::U32),
         BranchSpec::new("event", BranchType::U64),
-        BranchSpec::new("nPhoton", BranchType::I32),
-        BranchSpec::new("Photon_pt", BranchType::VecF32),
-        BranchSpec::new("Photon_eta", BranchType::VecF32),
-        BranchSpec::new("Photon_phi", BranchType::VecF32),
-        BranchSpec::new("nPFCand", BranchType::I32),
-        BranchSpec::new("PFCand_pt", BranchType::VecF32),
-        BranchSpec::new("PFCand_eta", BranchType::VecF32),
-        BranchSpec::new("PFCand_phi", BranchType::VecF32),
-        BranchSpec::new("PFCand_pdgId", BranchType::VecI32),
-        BranchSpec::new("PFCand_mass", BranchType::VecF32).optional(),
-    ])?)
+        BranchSpec::new(&mapping.photon.count, BranchType::I32),
+        BranchSpec::new(&mapping.photon.pt, BranchType::VecF32),
+        BranchSpec::new(&mapping.photon.eta, BranchType::VecF32),
+        BranchSpec::new(&mapping.photon.phi, BranchType::VecF32),
+        BranchSpec::new(&mapping.charged_candidate.count, BranchType::I32),
+        BranchSpec::new(&mapping.charged_candidate.pt, BranchType::VecF32),
+        BranchSpec::new(&mapping.charged_candidate.eta, BranchType::VecF32),
+        BranchSpec::new(&mapping.charged_candidate.phi, BranchType::VecF32),
+        BranchSpec::new(&mapping.charged_candidate.pdg_id, BranchType::VecI32),
+    ];
+    if let Some(mass) = &mapping.charged_candidate.mass {
+        specs.push(BranchSpec::new(mass, BranchType::VecF32).optional());
+    }
+    Ok(BranchSchema::new(specs)?)
 }
 
 fn analyze(
     input: &Path,
     schema: &BranchSchema,
     cuts: &HToRhoGammaCuts,
+    mapping: &HToRhoGammaBranchMapping,
     max_events: Option<usize>,
     mut csv_writer: Option<&mut CandidateCsvWriter>,
 ) -> Result<Report, Box<dyn Error>> {
@@ -226,28 +256,42 @@ fn analyze(
         let luminosity_block = event.scalar::<u32>("luminosityBlock")?;
         let event_number = event.scalar::<u64>("event")?;
 
-        let n_photon = nonnegative_count(event.scalar::<i32>("nPhoton")?, "nPhoton")?;
-        let photon_pt = event.vector_ref::<f32>("Photon_pt")?;
-        let photon_eta = event.vector_ref::<f32>("Photon_eta")?;
-        let photon_phi = event.vector_ref::<f32>("Photon_phi")?;
-        validate_len("Photon_pt", photon_pt.len(), n_photon)?;
-        validate_len("Photon_eta", photon_eta.len(), n_photon)?;
-        validate_len("Photon_phi", photon_phi.len(), n_photon)?;
+        let n_photon = nonnegative_count(
+            event.scalar::<i32>(&mapping.photon.count)?,
+            &mapping.photon.count,
+        )?;
+        let photon_pt = event.vector_ref::<f32>(&mapping.photon.pt)?;
+        let photon_eta = event.vector_ref::<f32>(&mapping.photon.eta)?;
+        let photon_phi = event.vector_ref::<f32>(&mapping.photon.phi)?;
+        validate_len(&mapping.photon.pt, photon_pt.len(), n_photon)?;
+        validate_len(&mapping.photon.eta, photon_eta.len(), n_photon)?;
+        validate_len(&mapping.photon.phi, photon_phi.len(), n_photon)?;
 
-        let n_pfcand = nonnegative_count(event.scalar::<i32>("nPFCand")?, "nPFCand")?;
-        let pfcand_pt = event.vector_ref::<f32>("PFCand_pt")?;
-        let pfcand_eta = event.vector_ref::<f32>("PFCand_eta")?;
-        let pfcand_phi = event.vector_ref::<f32>("PFCand_phi")?;
-        let pfcand_pdg_id = event.vector_ref::<i32>("PFCand_pdgId")?;
-        validate_len("PFCand_pt", pfcand_pt.len(), n_pfcand)?;
-        validate_len("PFCand_eta", pfcand_eta.len(), n_pfcand)?;
-        validate_len("PFCand_phi", pfcand_phi.len(), n_pfcand)?;
-        validate_len("PFCand_pdgId", pfcand_pdg_id.len(), n_pfcand)?;
+        let n_pfcand = nonnegative_count(
+            event.scalar::<i32>(&mapping.charged_candidate.count)?,
+            &mapping.charged_candidate.count,
+        )?;
+        let pfcand_pt = event.vector_ref::<f32>(&mapping.charged_candidate.pt)?;
+        let pfcand_eta = event.vector_ref::<f32>(&mapping.charged_candidate.eta)?;
+        let pfcand_phi = event.vector_ref::<f32>(&mapping.charged_candidate.phi)?;
+        let pfcand_pdg_id = event.vector_ref::<i32>(&mapping.charged_candidate.pdg_id)?;
+        validate_len(&mapping.charged_candidate.pt, pfcand_pt.len(), n_pfcand)?;
+        validate_len(&mapping.charged_candidate.eta, pfcand_eta.len(), n_pfcand)?;
+        validate_len(&mapping.charged_candidate.phi, pfcand_phi.len(), n_pfcand)?;
+        validate_len(
+            &mapping.charged_candidate.pdg_id,
+            pfcand_pdg_id.len(),
+            n_pfcand,
+        )?;
 
-        let pfcand_mass = if event.has_physical_branch("PFCand_mass") {
-            let mass = event.vector_ref::<f32>("PFCand_mass")?;
-            validate_len("PFCand_mass", mass.len(), n_pfcand)?;
-            Some(mass)
+        let pfcand_mass = if let Some(mass_field) = &mapping.charged_candidate.mass {
+            if event.has_physical_branch(mass_field) {
+                let mass = event.vector_ref::<f32>(mass_field)?;
+                validate_len(mass_field, mass.len(), n_pfcand)?;
+                Some(mass)
+            } else {
+                None
+            }
         } else {
             None
         };

@@ -134,7 +134,25 @@ impl std::error::Error for HToRhoGammaConfigError {
 
 #[derive(Debug, Deserialize)]
 struct HToRhoGammaConfig {
+    analysis: Option<AnalysisConfig>,
+    objects: Option<ObjectsConfig>,
     baseline: BaselineConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalysisConfig {
+    branch_catalogue: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ObjectsConfig {
+    photon: ObjectSourceConfig,
+    charged_candidate: ObjectSourceConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct ObjectSourceConfig {
+    source: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,6 +173,132 @@ struct HToRhoGammaCutsConfig {
     pion_mass: f64,
     rho_mass_target: f64,
     higgs_mass_reference: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HToRhoGammaBranchMapping {
+    pub photon: PhotonBranches,
+    pub charged_candidate: ChargedCandidateBranches,
+}
+
+impl HToRhoGammaBranchMapping {
+    pub fn zcountinghlt_naive() -> Self {
+        Self {
+            photon: PhotonBranches {
+                semantic_name: "ScoutingPhoton".to_string(),
+                count: "nPhoton".to_string(),
+                pt: "Photon_pt".to_string(),
+                eta: "Photon_eta".to_string(),
+                phi: "Photon_phi".to_string(),
+            },
+            charged_candidate: ChargedCandidateBranches {
+                semantic_name: "ScoutingChargedCandidate".to_string(),
+                count: "nPFCand".to_string(),
+                pt: "PFCand_pt".to_string(),
+                eta: "PFCand_eta".to_string(),
+                phi: "PFCand_phi".to_string(),
+                pdg_id: "PFCand_pdgId".to_string(),
+                mass: Some("PFCand_mass".to_string()),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhotonBranches {
+    pub semantic_name: String,
+    pub count: String,
+    pub pt: String,
+    pub eta: String,
+    pub phi: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChargedCandidateBranches {
+    pub semantic_name: String,
+    pub count: String,
+    pub pt: String,
+    pub eta: String,
+    pub phi: String,
+    pub pdg_id: String,
+    pub mass: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BranchCatalogue {
+    objects: std::collections::HashMap<String, CatalogueObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CatalogueObject {
+    count: String,
+    fields: std::collections::HashMap<String, String>,
+}
+
+pub fn load_branch_mapping(
+    config_path: &Path,
+) -> Result<(String, HToRhoGammaBranchMapping), Box<dyn std::error::Error>> {
+    let contents = std::fs::read_to_string(config_path)?;
+    let config: HToRhoGammaConfig = toml::from_str(&contents)?;
+
+    let analysis = config.analysis.ok_or("missing [analysis] table")?;
+    let objects = config.objects.ok_or("missing [objects] table")?;
+
+    let cat_rel_path = analysis.branch_catalogue;
+    let mut catalogue_path = config_path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join(&cat_rel_path);
+    if !catalogue_path.exists() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        catalogue_path = workspace_root.join(&cat_rel_path);
+    }
+
+    if !catalogue_path.exists() {
+        return Err(format!("branch_catalogue not found: {}", catalogue_path.display()).into());
+    }
+
+    let cat_contents = std::fs::read_to_string(&catalogue_path)?;
+    let catalogue: BranchCatalogue = serde_yaml::from_str(&cat_contents)?;
+
+    let pho_src = &objects.photon.source;
+    let pho_obj = catalogue
+        .objects
+        .get(pho_src)
+        .ok_or_else(|| format!("missing photon object: {}", pho_src))?;
+    let photon = PhotonBranches {
+        semantic_name: pho_src.clone(),
+        count: pho_obj.count.clone(),
+        pt: pho_obj.fields.get("pt").ok_or("missing pt")?.clone(),
+        eta: pho_obj.fields.get("eta").ok_or("missing eta")?.clone(),
+        phi: pho_obj.fields.get("phi").ok_or("missing phi")?.clone(),
+    };
+
+    let chg_src = &objects.charged_candidate.source;
+    let chg_obj = catalogue
+        .objects
+        .get(chg_src)
+        .ok_or_else(|| format!("missing charged_candidate object: {}", chg_src))?;
+    let charged_candidate = ChargedCandidateBranches {
+        semantic_name: chg_src.clone(),
+        count: chg_obj.count.clone(),
+        pt: chg_obj.fields.get("pt").ok_or("missing pt")?.clone(),
+        eta: chg_obj.fields.get("eta").ok_or("missing eta")?.clone(),
+        phi: chg_obj.fields.get("phi").ok_or("missing phi")?.clone(),
+        pdg_id: chg_obj.fields.get("pdgId").ok_or("missing pdgId")?.clone(),
+        mass: chg_obj.fields.get("mass").cloned(),
+    };
+
+    Ok((
+        cat_rel_path,
+        HToRhoGammaBranchMapping {
+            photon,
+            charged_candidate,
+        },
+    ))
 }
 
 impl HToRhoGammaCutsConfig {
@@ -553,6 +697,88 @@ pion_mass = 0.13957039
 rho_mass_target = 0.77526
 higgs_mass_reference = 125.0
 "#
+    }
+
+    #[test]
+    fn loads_branch_mapping_from_yaml() {
+        let config_toml = r#"
+[analysis]
+branch_catalogue = "configs/branches/scouting_run3.yaml"
+
+[objects.photon]
+source = "ScoutingPhoton"
+
+[objects.charged_candidate]
+source = "ScoutingChargedCandidate"
+
+[baseline.zcountinghlt_naive]
+photon_min_pt = 15.0
+pi1_min_pt = 5.0
+pi2_min_pt = 2.0
+max_delta_r_pipi = 0.1
+rho_mass_min = 0.3
+rho_mass_max = 1.2
+min_delta_r_gamma_rho = 1.0
+max_delta_r_gamma_rho = 5.0
+pion_mass = 0.13957039
+rho_mass_target = 0.77526
+higgs_mass_reference = 125.0
+"#;
+        // test fallback to workspace root
+        let uid = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let config_path = std::env::temp_dir().join(format!("h_rho_gamma_test1_{uid}.toml"));
+        std::fs::write(&config_path, config_toml).unwrap();
+
+        let (source, mapping) = load_branch_mapping(&config_path).expect("load branch mapping");
+        assert_eq!(source, "configs/branches/scouting_run3.yaml");
+        assert_eq!(mapping.photon.semantic_name, "ScoutingPhoton");
+        assert_eq!(mapping.photon.count, "nPhoton");
+        assert_eq!(
+            mapping.charged_candidate.semantic_name,
+            "ScoutingChargedCandidate"
+        );
+        assert_eq!(mapping.charged_candidate.pdg_id, "PFCand_pdgId");
+    }
+
+    #[test]
+    fn missing_catalogue_object_fails() {
+        let config_toml = r#"
+[analysis]
+branch_catalogue = "configs/branches/scouting_run3.yaml"
+
+[objects.photon]
+source = "MissingPhoton"
+
+[objects.charged_candidate]
+source = "ScoutingChargedCandidate"
+
+[baseline.zcountinghlt_naive]
+photon_min_pt = 15.0
+pi1_min_pt = 5.0
+pi2_min_pt = 2.0
+max_delta_r_pipi = 0.1
+rho_mass_min = 0.3
+rho_mass_max = 1.2
+min_delta_r_gamma_rho = 1.0
+max_delta_r_gamma_rho = 5.0
+pion_mass = 0.13957039
+rho_mass_target = 0.77526
+higgs_mass_reference = 125.0
+"#;
+        let uid = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let config_path = std::env::temp_dir().join(format!("h_rho_gamma_test2_{uid}.toml"));
+        std::fs::write(&config_path, config_toml).unwrap();
+
+        let err = load_branch_mapping(&config_path).expect_err("should fail");
+        assert!(err
+            .to_string()
+            .contains("missing photon object: MissingPhoton"));
     }
 
     #[test]

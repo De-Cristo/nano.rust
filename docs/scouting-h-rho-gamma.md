@@ -202,8 +202,7 @@ rows.
 
 ## Branch Mapping
 
-The branch catalogue is in `configs/branches/scouting_run3.yaml`. The current
-example uses explicit branch names matching that mapping:
+The branch catalogue is in `configs/branches/scouting_run3.yaml`. The example reads `[analysis].branch_catalogue` and dynamically resolves semantic aliases:
 
 ```text
 ScoutingPhoton.count -> nPhoton
