@@ -1,0 +1,22 @@
+# Run-3 Scouting Branch Catalogue
+# This maps semantic scouting objects to the actual branch names found in the dataset:
+# /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM
+
+objects:
+  ScoutingPhoton:
+    count: nPhoton
+    fields:
+      pt: Photon_pt
+      eta: Photon_eta
+      phi: Photon_phi
+      # Note: mass is assumed to be 0 as Photon_mass is absent
+
+  ScoutingChargedCandidate:
+    count: nPFCand
+    fields:
+      pt: PFCand_pt
+      eta: PFCand_eta
+      phi: PFCand_phi
+      mass: PFCand_mass
+      pdgId: PFCand_pdgId
+      # Note: charge is inferred from pdgId

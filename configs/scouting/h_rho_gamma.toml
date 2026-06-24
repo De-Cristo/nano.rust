@@ -1,0 +1,40 @@
+# Independent Run-3 scouting H -> rho gamma example configuration.
+#
+# This file is intentionally separate from normal NanoAOD examples such as
+# configs/higgs4l.toml. The scouting branch catalogue is expected to be
+# developed after inspecting real files from the signal dataset below.
+
+[analysis]
+name = "scouting_h_rho_gamma"
+era = "Run3"
+channel = "HToRhoGamma"
+branch_catalogue = "configs/branches/scouting_run3.yaml"
+
+[dataset.signal]
+name = "ggH_HToRhoGamma_Run3NanoAODv15"
+dataset = "/GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM"
+instance = "prod/global"
+max_files_for_demo = 5
+
+[objects.photon]
+# Semantic scouting object alias. The concrete branch mapping belongs in
+# configs/branches/scouting_run3.yaml after the branch survey is complete.
+source = "ScoutingPhoton"
+min_pt = 35.0
+max_abs_eta = 2.5
+
+[objects.charged_candidate]
+# Semantic scouting object alias for the charged pair used to build rho -> pi+ pi-.
+source = "ScoutingChargedCandidate"
+min_pt_leading = 20.0
+min_pt_subleading = 5.0
+max_abs_eta = 2.5
+mass_hypothesis = "pion"
+
+[rho]
+require_opposite_charge = true
+mass_hypothesis = "pi+pi-"
+
+[higgs]
+candidate = "rho + photon"
+h_mass_histogram_range = [70.0, 180.0]
