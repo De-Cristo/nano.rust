@@ -249,13 +249,26 @@ def plot_histograms(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import numpy as np
+    
+    try:
+        import mplhep as hep
+        plt.style.use(hep.style.CMS)
+    except ImportError:
+        hep = None
 
     written = []
     for column in PLOT_COLUMNS:
         values = numeric_values(rows, column)
-        figure, axis = plt.subplots(figsize=(6.0, 4.0))
+        figure, axis = plt.subplots(figsize=(8.0, 6.0))
         if values:
-            axis.hist(values, bins=min(20, max(1, len(values))))
+            bins_count = 100
+            if hep:
+                counts, bins = np.histogram(values, bins=bins_count)
+                hep.histplot(counts, bins, ax=axis, histtype="fill", label="Signal")
+                hep.cms.label("Simulation Preliminary", data=False, loc=0, ax=axis)
+            else:
+                axis.hist(values, bins=bins_count)
         axis.set_title(f"{prefix}: {column}")
         axis.set_xlabel(column)
         axis.set_ylabel("candidates")
@@ -267,9 +280,15 @@ def plot_histograms(
     for x_column, y_column, filename in PLOT_2D_COLUMNS:
         x_values = numeric_values(rows, x_column)
         y_values = numeric_values(rows, y_column)
-        figure, axis = plt.subplots(figsize=(6.0, 4.5))
+        figure, axis = plt.subplots(figsize=(8.0, 6.0))
         if x_values and y_values:
-            axis.hist2d(x_values, y_values, bins=min(30, max(1, len(x_values))))
+            bins_count = 50
+            if hep:
+                h, xedges, yedges = np.histogram2d(x_values, y_values, bins=bins_count)
+                hep.hist2dplot(h, xedges, yedges, ax=axis, cmap="viridis")
+                hep.cms.label("Simulation Preliminary", data=False, loc=0, ax=axis)
+            else:
+                axis.hist2d(x_values, y_values, bins=bins_count)
         axis.set_title(f"{prefix}: {filename.removesuffix('.png')}")
         axis.set_xlabel(x_column)
         axis.set_ylabel(y_column)
