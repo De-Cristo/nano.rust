@@ -16,6 +16,7 @@ pub use nano_rootio::HttpSourceOptions;
 
 pub mod datacard;
 pub mod samples;
+pub mod scouting_hrhogamma;
 
 pub type Result<T> = std::result::Result<T, RootError>;
 

@@ -1,27 +1,14 @@
-use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
+use nano_io::scouting_hrhogamma::{reconstruct_event, EventInputs, HCand, HToRhoGammaCuts};
 
 const ENV_INPUT: &str = "NANO_SCOUTING_HRHOGAMMA_FILE";
 const CHUNK_SIZE: usize = 1024;
 const MAX_PRINTED_CANDIDATES: usize = 10;
-
-const M_PI_CHARGED: f64 = 0.139_570_39;
-const M_RHO_TARGET: f64 = 0.775_26;
-const M_HIGGS_REFERENCE: f64 = 125.0;
-
-const NAIVE_PHO_MIN_PT: f64 = 15.0;
-const NAIVE_PI1_MIN_PT: f64 = 5.0;
-const NAIVE_PI2_MIN_PT: f64 = 2.0;
-const NAIVE_MAX_DR_PIPI: f64 = 0.1;
-const NAIVE_RHO_MASS_MIN: f64 = 0.3;
-const NAIVE_RHO_MASS_MAX: f64 = 1.2;
-const NAIVE_MIN_DR_G_RHO: f64 = 1.0;
-const NAIVE_MAX_DR_G_RHO: f64 = 5.0;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(options) = Options::parse()? else {
@@ -30,18 +17,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let schema = scouting_schema()?;
+    let cuts = HToRhoGammaCuts::zcountinghlt_naive();
     println!("input: {}", options.input.display());
     println!("max_events: {}", display_limit(options.max_events));
     println!("branch_schema: ok");
     println!("branch_mapping: ScoutingPhoton=Photon_*, ScoutingChargedCandidate=PFCand_*");
     println!(
-        "constants: m_pi_charged={M_PI_CHARGED:.8} m_rho_target={M_RHO_TARGET:.5} m_higgs_reference={M_HIGGS_REFERENCE:.1}"
+        "constants: m_pi_charged={:.8} m_rho_target={:.5} m_higgs_reference={:.1}",
+        cuts.pion_mass, cuts.rho_mass_target, cuts.higgs_mass_reference
     );
     println!(
-        "cuts: photon_pt>={NAIVE_PHO_MIN_PT:.1} pi1_pt>={NAIVE_PI1_MIN_PT:.1} pi2_pt>={NAIVE_PI2_MIN_PT:.1} dr_pipi<{NAIVE_MAX_DR_PIPI:.2} rho_mass=[{NAIVE_RHO_MASS_MIN:.1},{NAIVE_RHO_MASS_MAX:.1}] dr_gamma_rho=[{NAIVE_MIN_DR_G_RHO:.1},{NAIVE_MAX_DR_G_RHO:.1}]"
+        "cuts: photon_pt>={:.1} pi1_pt>={:.1} pi2_pt>={:.1} dr_pipi<{:.2} rho_mass=[{:.1},{:.1}] dr_gamma_rho=[{:.1},{:.1}]",
+        cuts.photon_min_pt,
+        cuts.pi1_min_pt,
+        cuts.pi2_min_pt,
+        cuts.max_delta_r_pipi,
+        cuts.rho_mass_min,
+        cuts.rho_mass_max,
+        cuts.min_delta_r_gamma_rho,
+        cuts.max_delta_r_gamma_rho
     );
 
-    let report = analyze(&options.input, &schema, options.max_events)?;
+    let report = analyze(&options.input, &schema, &cuts, options.max_events)?;
     print_report(&report);
     Ok(())
 }
@@ -112,6 +109,7 @@ fn scouting_schema() -> Result<BranchSchema, Box<dyn Error>> {
 fn analyze(
     input: &Path,
     schema: &BranchSchema,
+    cuts: &HToRhoGammaCuts,
     max_events: Option<usize>,
 ) -> Result<Report, Box<dyn Error>> {
     let mut report = Report::default();
@@ -154,67 +152,60 @@ fn analyze(
             None
         };
 
-        let photon = select_leading_photon(photon_pt, photon_eta, photon_phi);
-        let mut pions = collect_pions(
-            pfcand_pt,
-            pfcand_eta,
-            pfcand_phi,
-            pfcand_pdg_id,
-            pfcand_mass,
-            &mut report,
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt,
+                photon_eta,
+                photon_phi,
+                pfcand_pt,
+                pfcand_eta,
+                pfcand_phi,
+                pfcand_pdg_id,
+                pfcand_mass,
+            },
+            cuts,
         );
 
-        let Some(photon) = photon else {
+        report.plus_pions += reco.plus_pion_count;
+        report.minus_pions += reco.minus_pion_count;
+        report.pion_mass_sum += reco.source_pion_mass_sum;
+        report.pion_mass_count += reco.source_pion_mass_count;
+
+        if reco.photon.is_none() {
             continue;
-        };
+        }
         report.cutflow.leading_photon += 1;
 
-        if pions.len() < 2 {
+        if reco.pions.len() < 2 {
             continue;
         }
         report.cutflow.two_pions += 1;
 
-        pions.sort_by(|a, b| b.pt.partial_cmp(&a.pt).unwrap_or(Ordering::Equal));
-        let PairSearch {
-            has_os_pt_pair,
-            has_dr_pair,
-            best_rho,
-        } = find_best_rho(&pions);
-
-        if !has_os_pt_pair {
+        if !reco.has_os_pt_pair {
             continue;
         }
         report.cutflow.os_pt_pair += 1;
 
-        if !has_dr_pair {
+        if !reco.has_pipi_delta_r_pair {
             continue;
         }
         report.cutflow.pipi_delta_r += 1;
 
-        let Some(rho) = best_rho else {
-            continue;
-        };
-        report.cutflow.rho_mass_window += 1;
-
-        let gamma_rho_delta_r = delta_r(photon.eta, photon.phi, rho.eta, rho.phi);
-        if !(NAIVE_MIN_DR_G_RHO..=NAIVE_MAX_DR_G_RHO).contains(&gamma_rho_delta_r) {
+        if reco.rho.is_none() {
             continue;
         }
-        report.cutflow.gamma_rho_delta_r += 1;
+        report.cutflow.rho_mass_window += 1;
 
-        let h_p4 = photon.p4.add(&rho.p4);
-        let h = HCand {
-            gamma: photon,
-            rho,
-            p4: h_p4,
-            mass: h_p4.mass(),
-            pt: h_p4.pt(),
-            eta: h_p4.eta(),
-            phi: h_p4.phi(),
+        let Some(h) = reco.h else {
+            continue;
         };
+        report.cutflow.gamma_rho_delta_r += 1;
         report.cutflow.h_candidate += 1;
 
         if report.candidates.len() < MAX_PRINTED_CANDIDATES {
+            let gamma_rho_delta_r = reco
+                .gamma_rho_delta_r
+                .expect("H candidate requires gamma-rho deltaR");
             report.candidates.push(CandidateSummary {
                 run,
                 luminosity_block,
@@ -238,113 +229,6 @@ fn validate_len(name: &str, actual: usize, expected: usize) -> Result<(), Box<dy
         Ok(())
     } else {
         Err(format!("{name} length {actual} does not match count {expected}").into())
-    }
-}
-
-fn select_leading_photon(pt: &[f32], eta: &[f32], phi: &[f32]) -> Option<SimpleCand> {
-    pt.iter()
-        .zip(eta)
-        .zip(phi)
-        .filter_map(|((&pt, &eta), &phi)| {
-            let pt = f64::from(pt);
-            (pt >= NAIVE_PHO_MIN_PT)
-                .then(|| SimpleCand::new(pt, f64::from(eta), f64::from(phi), 0.0, 0))
-        })
-        .max_by(|a, b| a.pt.partial_cmp(&b.pt).unwrap_or(Ordering::Equal))
-}
-
-fn collect_pions(
-    pt: &[f32],
-    eta: &[f32],
-    phi: &[f32],
-    pdg_id: &[i32],
-    mass: Option<&[f32]>,
-    report: &mut Report,
-) -> Vec<SimpleCand> {
-    let mut pions = Vec::new();
-    for index in 0..pdg_id.len() {
-        match pdg_id[index] {
-            211 => report.plus_pions += 1,
-            -211 => report.minus_pions += 1,
-            _ => {}
-        }
-
-        if pdg_id[index].abs() != 211 {
-            continue;
-        }
-        let charge = pdg_id[index].signum();
-        if charge == 0 {
-            continue;
-        }
-        let pt = f64::from(pt[index]);
-        if pt < NAIVE_PI2_MIN_PT {
-            continue;
-        }
-        if let Some(mass) = mass {
-            report.pion_mass_sum += f64::from(mass[index]);
-            report.pion_mass_count += 1;
-        }
-        pions.push(SimpleCand::new(
-            pt,
-            f64::from(eta[index]),
-            f64::from(phi[index]),
-            M_PI_CHARGED,
-            charge,
-        ));
-    }
-    pions
-}
-
-#[derive(Debug)]
-struct PairSearch {
-    has_os_pt_pair: bool,
-    has_dr_pair: bool,
-    best_rho: Option<RhoCand>,
-}
-
-fn find_best_rho(pions: &[SimpleCand]) -> PairSearch {
-    let mut has_os_pt_pair = false;
-    let mut has_dr_pair = false;
-    let mut best: Option<(f64, RhoCand)> = None;
-
-    for i in 0..pions.len() {
-        for j in (i + 1)..pions.len() {
-            let leading = &pions[i];
-            let subleading = &pions[j];
-            if leading.pt < NAIVE_PI1_MIN_PT || subleading.pt < NAIVE_PI2_MIN_PT {
-                continue;
-            }
-            if leading.charge * subleading.charge >= 0 {
-                continue;
-            }
-            has_os_pt_pair = true;
-
-            let pipi_delta_r = delta_r(leading.eta, leading.phi, subleading.eta, subleading.phi);
-            if pipi_delta_r >= NAIVE_MAX_DR_PIPI {
-                continue;
-            }
-            has_dr_pair = true;
-
-            let rho = RhoCand::from_pair(leading.clone(), subleading.clone(), pipi_delta_r);
-            if !(NAIVE_RHO_MASS_MIN..=NAIVE_RHO_MASS_MAX).contains(&rho.mass) {
-                continue;
-            }
-
-            let distance = (rho.mass - M_RHO_TARGET).abs();
-            if best
-                .as_ref()
-                .map(|(best_distance, _)| distance < *best_distance)
-                .unwrap_or(true)
-            {
-                best = Some((distance, rho));
-            }
-        }
-    }
-
-    PairSearch {
-        has_os_pt_pair,
-        has_dr_pair,
-        best_rho: best.map(|(_, rho)| rho),
     }
 }
 
@@ -418,140 +302,6 @@ fn print_report(report: &Report) {
             candidate.h.rho.pipi_delta_r, candidate.gamma_rho_delta_r, candidate.rho_over_gamma_pt
         );
     }
-}
-
-#[derive(Debug, Clone)]
-struct SimpleCand {
-    pt: f64,
-    eta: f64,
-    phi: f64,
-    mass: f64,
-    charge: i32,
-    p4: FourVec,
-}
-
-impl SimpleCand {
-    fn new(pt: f64, eta: f64, phi: f64, mass: f64, charge: i32) -> Self {
-        Self {
-            pt,
-            eta,
-            phi,
-            mass,
-            charge,
-            p4: FourVec::from_pt_eta_phi_mass(pt, eta, phi, mass),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RhoCand {
-    pi_plus: SimpleCand,
-    pi_minus: SimpleCand,
-    p4: FourVec,
-    mass: f64,
-    pt: f64,
-    eta: f64,
-    phi: f64,
-    pipi_delta_r: f64,
-}
-
-impl RhoCand {
-    fn from_pair(first: SimpleCand, second: SimpleCand, pipi_delta_r: f64) -> Self {
-        let (pi_plus, pi_minus) = if first.charge > 0 {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        let p4 = pi_plus.p4.add(&pi_minus.p4);
-        Self {
-            pi_plus,
-            pi_minus,
-            p4,
-            mass: p4.mass(),
-            pt: p4.pt(),
-            eta: p4.eta(),
-            phi: p4.phi(),
-            pipi_delta_r,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct HCand {
-    gamma: SimpleCand,
-    rho: RhoCand,
-    p4: FourVec,
-    mass: f64,
-    pt: f64,
-    eta: f64,
-    phi: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FourVec {
-    px: f64,
-    py: f64,
-    pz: f64,
-    e: f64,
-}
-
-impl FourVec {
-    fn from_pt_eta_phi_mass(pt: f64, eta: f64, phi: f64, mass: f64) -> Self {
-        let px = pt * phi.cos();
-        let py = pt * phi.sin();
-        let pz = pt * eta.sinh();
-        let p2 = px * px + py * py + pz * pz;
-        let e = (p2 + mass * mass).sqrt();
-        Self { px, py, pz, e }
-    }
-
-    fn add(&self, other: &Self) -> Self {
-        Self {
-            px: self.px + other.px,
-            py: self.py + other.py,
-            pz: self.pz + other.pz,
-            e: self.e + other.e,
-        }
-    }
-
-    fn pt(&self) -> f64 {
-        self.px.hypot(self.py)
-    }
-
-    fn eta(&self) -> f64 {
-        let pt = self.pt();
-        if pt > 0.0 {
-            (self.pz / pt).asinh()
-        } else {
-            0.0
-        }
-    }
-
-    fn phi(&self) -> f64 {
-        self.py.atan2(self.px)
-    }
-
-    fn mass(&self) -> f64 {
-        let p2 = self.px * self.px + self.py * self.py + self.pz * self.pz;
-        (self.e * self.e - p2).max(0.0).sqrt()
-    }
-}
-
-fn delta_r(eta_a: f64, phi_a: f64, eta_b: f64, phi_b: f64) -> f64 {
-    let deta = eta_a - eta_b;
-    let dphi = delta_phi(phi_a, phi_b);
-    deta.hypot(dphi)
-}
-
-fn delta_phi(phi_a: f64, phi_b: f64) -> f64 {
-    let mut dphi = phi_a - phi_b;
-    while dphi > std::f64::consts::PI {
-        dphi -= 2.0 * std::f64::consts::PI;
-    }
-    while dphi <= -std::f64::consts::PI {
-        dphi += 2.0 * std::f64::consts::PI;
-    }
-    dphi
 }
 
 #[derive(Debug, Default)]
