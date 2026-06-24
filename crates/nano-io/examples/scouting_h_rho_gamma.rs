@@ -7,6 +7,8 @@ use nano_io::events_chunked;
 use nano_io::scouting_hrhogamma::{reconstruct_event, EventInputs, HCand, HToRhoGammaCuts};
 
 const ENV_INPUT: &str = "NANO_SCOUTING_HRHOGAMMA_FILE";
+const DEFAULT_CONFIG_PATH: &str = "configs/scouting/h_rho_gamma.toml";
+const BASELINE_TABLE: &str = "[baseline.zcountinghlt_naive]";
 const CHUNK_SIZE: usize = 1024;
 const MAX_PRINTED_CANDIDATES: usize = 10;
 
@@ -17,9 +19,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let schema = scouting_schema()?;
-    let cuts = HToRhoGammaCuts::zcountinghlt_naive();
+    let (cuts, cut_source) = load_cuts(&options)?;
     println!("input: {}", options.input.display());
     println!("max_events: {}", display_limit(options.max_events));
+    println!("cut_source: {cut_source}");
     println!("branch_schema: ok");
     println!("branch_mapping: ScoutingPhoton=Photon_*, ScoutingChargedCandidate=PFCand_*");
     println!(
@@ -47,6 +50,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct Options {
     input: PathBuf,
     max_events: Option<usize>,
+    config_path: PathBuf,
+    config_display: String,
+    config_explicit: bool,
 }
 
 impl Options {
@@ -55,8 +61,10 @@ impl Options {
         if positional.iter().any(|arg| arg == "-h" || arg == "--help") {
             return Ok(None);
         }
-        if positional.len() > 2 {
-            return Err("usage: scouting_h_rho_gamma <input.root> [max-events]".into());
+        if positional.len() > 3 {
+            return Err(
+                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml]".into(),
+            );
         }
 
         let input = if positional.is_empty() {
@@ -67,25 +75,79 @@ impl Options {
         } else {
             PathBuf::from(positional.remove(0))
         };
-        let max_events = positional
-            .first()
-            .map(|value| value.parse::<usize>())
-            .transpose()
-            .map_err(|err| format!("invalid max event count: {err}"))?;
 
-        Ok(Some(Self { input, max_events }))
+        let mut max_events = None;
+        let mut config_path = workspace_default_config_path();
+        let mut config_display = DEFAULT_CONFIG_PATH.to_string();
+        let mut config_explicit = false;
+
+        match positional.as_slice() {
+            [] => {}
+            [second] => match second.parse::<usize>() {
+                Ok(value) => max_events = Some(value),
+                Err(_) => {
+                    config_path = PathBuf::from(second);
+                    config_display = second.clone();
+                    config_explicit = true;
+                }
+            },
+            [second, third] => {
+                max_events = Some(
+                    second
+                        .parse::<usize>()
+                        .map_err(|err| format!("invalid max event count: {err}"))?,
+                );
+                config_path = PathBuf::from(third);
+                config_display = third.clone();
+                config_explicit = true;
+            }
+            _ => unreachable!("positional length already checked"),
+        }
+
+        Ok(Some(Self {
+            input,
+            max_events,
+            config_path,
+            config_display,
+            config_explicit,
+        }))
     }
 }
 
 fn print_usage() {
-    println!("usage: scouting_h_rho_gamma <input.root> [max-events]");
+    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml]");
     println!("or set {ENV_INPUT}=<input.root>");
+    println!("default config: {DEFAULT_CONFIG_PATH}");
 }
 
 fn display_limit(limit: Option<usize>) -> String {
     limit
         .map(|value| value.to_string())
         .unwrap_or_else(|| "all".to_string())
+}
+
+fn workspace_default_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join(DEFAULT_CONFIG_PATH))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
+}
+
+fn load_cuts(options: &Options) -> Result<(HToRhoGammaCuts, String), Box<dyn Error>> {
+    if options.config_path.exists() {
+        let cuts = HToRhoGammaCuts::from_config_path(&options.config_path)?;
+        return Ok((cuts, format!("{} {BASELINE_TABLE}", options.config_display)));
+    }
+
+    if options.config_explicit {
+        return Err(format!("config file does not exist: {}", options.config_display).into());
+    }
+
+    Ok((
+        HToRhoGammaCuts::zcountinghlt_naive(),
+        "built-in zcountinghlt_naive fallback".to_string(),
+    ))
 }
 
 fn scouting_schema() -> Result<BranchSchema, Box<dyn Error>> {

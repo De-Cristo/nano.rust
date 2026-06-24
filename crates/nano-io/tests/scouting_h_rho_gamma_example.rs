@@ -42,6 +42,12 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
         stderr
     );
     assert!(stdout.contains("input: "), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains(
+            "cut_source: configs/scouting/h_rho_gamma.toml [baseline.zcountinghlt_naive]"
+        ),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains("branch_schema: ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("cutflow:"), "stdout:\n{stdout}");
     assert!(stdout.contains("processed_events:"), "stdout:\n{stdout}");

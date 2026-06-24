@@ -30,6 +30,18 @@ An optional second positional argument limits the number of processed events:
 cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100
 ```
 
+An optional third positional argument supplies a config path:
+
+```bash
+cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
+```
+
+If no config path is supplied, the example loads
+`configs/scouting/h_rho_gamma.toml` by default. If that default file is absent,
+it falls back to the built-in `HToRhoGammaCuts::zcountinghlt_naive()` values.
+If an explicit config path is supplied and cannot be read or validated, the
+example fails clearly instead of silently falling back.
+
 The committed code and scripts intentionally do not hardcode personal absolute
 paths.
 
@@ -47,6 +59,12 @@ With an event limit:
 scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100
 ```
 
+With an explicit config:
+
+```bash
+scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
+```
+
 Or with the environment fallback:
 
 ```bash
@@ -59,6 +77,8 @@ The example prints plain text. The important sections are:
 
 - `input`: the ROOT file path used for this run.
 - `max_events`: either `all` or the supplied event limit.
+- `cut_source`: the TOML config table used for cut values, or the built-in
+  fallback if the default config file is absent.
 - `branch_schema`: confirms the requested `nano_io::events_chunked` schema was
   built.
 - `branch_mapping`: documents the semantic scouting mapping used by this first
@@ -118,8 +138,18 @@ higgs_mass_reference = 125.0
 ```
 
 The example currently keeps these values as local constants so that the demo is
-self-contained. The config records the semantic source of those constants and
-is the natural place to wire configurable cuts in a later stage.
+self-contained fallback values. At runtime, it loads the same values from the
+config by default and prints:
+
+```text
+cut_source: configs/scouting/h_rho_gamma.toml [baseline.zcountinghlt_naive]
+```
+
+When the default config file is absent, the output instead reports:
+
+```text
+cut_source: built-in zcountinghlt_naive fallback
+```
 
 ## Candidate Algorithm
 

@@ -1,4 +1,8 @@
 use std::cmp::Ordering;
+use std::fmt;
+use std::path::Path;
+
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HToRhoGammaCuts {
@@ -31,11 +35,143 @@ impl HToRhoGammaCuts {
             higgs_mass_reference: 125.0,
         }
     }
+
+    pub fn from_config_path(path: &Path) -> Result<Self, HToRhoGammaConfigError> {
+        let contents = std::fs::read_to_string(path).map_err(HToRhoGammaConfigError::Io)?;
+        Self::from_config_toml_str(&contents)
+    }
+
+    pub fn from_config_toml_str(contents: &str) -> Result<Self, HToRhoGammaConfigError> {
+        let config: HToRhoGammaConfig =
+            toml::from_str(contents).map_err(HToRhoGammaConfigError::Parse)?;
+        let cuts = config.baseline.zcountinghlt_naive.into_cuts();
+        cuts.validate()?;
+        Ok(cuts)
+    }
+
+    pub fn validate(&self) -> Result<(), HToRhoGammaConfigError> {
+        if self.photon_min_pt < 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "photon_min_pt must be >= 0".to_string(),
+            ));
+        }
+        if self.pi2_min_pt < 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "pi2_min_pt must be >= 0".to_string(),
+            ));
+        }
+        if self.pi1_min_pt < self.pi2_min_pt {
+            return Err(HToRhoGammaConfigError::Validation(
+                "pi1_min_pt must be >= pi2_min_pt".to_string(),
+            ));
+        }
+        if self.max_delta_r_pipi <= 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "max_delta_r_pipi must be > 0".to_string(),
+            ));
+        }
+        if self.rho_mass_min >= self.rho_mass_max {
+            return Err(HToRhoGammaConfigError::Validation(
+                "rho_mass_min must be < rho_mass_max".to_string(),
+            ));
+        }
+        if self.min_delta_r_gamma_rho > self.max_delta_r_gamma_rho {
+            return Err(HToRhoGammaConfigError::Validation(
+                "min_delta_r_gamma_rho must be <= max_delta_r_gamma_rho".to_string(),
+            ));
+        }
+        if self.pion_mass <= 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "pion_mass must be > 0".to_string(),
+            ));
+        }
+        if self.rho_mass_target <= 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "rho_mass_target must be > 0".to_string(),
+            ));
+        }
+        if self.higgs_mass_reference <= 0.0 {
+            return Err(HToRhoGammaConfigError::Validation(
+                "higgs_mass_reference must be > 0".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for HToRhoGammaCuts {
     fn default() -> Self {
         Self::zcountinghlt_naive()
+    }
+}
+
+#[derive(Debug)]
+pub enum HToRhoGammaConfigError {
+    Io(std::io::Error),
+    Parse(toml::de::Error),
+    Validation(String),
+}
+
+impl fmt::Display for HToRhoGammaConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "failed to read config: {err}"),
+            Self::Parse(err) => write!(f, "failed to parse TOML: {err}"),
+            Self::Validation(message) => write!(f, "invalid HToRhoGamma cuts: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for HToRhoGammaConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            Self::Parse(err) => Some(err),
+            Self::Validation(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HToRhoGammaConfig {
+    baseline: BaselineConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct BaselineConfig {
+    zcountinghlt_naive: HToRhoGammaCutsConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct HToRhoGammaCutsConfig {
+    photon_min_pt: f64,
+    pi1_min_pt: f64,
+    pi2_min_pt: f64,
+    max_delta_r_pipi: f64,
+    rho_mass_min: f64,
+    rho_mass_max: f64,
+    min_delta_r_gamma_rho: f64,
+    max_delta_r_gamma_rho: f64,
+    pion_mass: f64,
+    rho_mass_target: f64,
+    higgs_mass_reference: f64,
+}
+
+impl HToRhoGammaCutsConfig {
+    fn into_cuts(self) -> HToRhoGammaCuts {
+        HToRhoGammaCuts {
+            photon_min_pt: self.photon_min_pt,
+            pi1_min_pt: self.pi1_min_pt,
+            pi2_min_pt: self.pi2_min_pt,
+            max_delta_r_pipi: self.max_delta_r_pipi,
+            rho_mass_min: self.rho_mass_min,
+            rho_mass_max: self.rho_mass_max,
+            min_delta_r_gamma_rho: self.min_delta_r_gamma_rho,
+            max_delta_r_gamma_rho: self.max_delta_r_gamma_rho,
+            pion_mass: self.pion_mass,
+            rho_mass_target: self.rho_mass_target,
+            higgs_mass_reference: self.higgs_mass_reference,
+        }
     }
 }
 
@@ -400,6 +536,77 @@ mod tests {
 
     fn default_cuts() -> HToRhoGammaCuts {
         HToRhoGammaCuts::zcountinghlt_naive()
+    }
+
+    fn default_cuts_toml() -> &'static str {
+        r#"
+[baseline.zcountinghlt_naive]
+photon_min_pt = 15.0
+pi1_min_pt = 5.0
+pi2_min_pt = 2.0
+max_delta_r_pipi = 0.1
+rho_mass_min = 0.3
+rho_mass_max = 1.2
+min_delta_r_gamma_rho = 1.0
+max_delta_r_gamma_rho = 5.0
+pion_mass = 0.13957039
+rho_mass_target = 0.77526
+higgs_mass_reference = 125.0
+"#
+    }
+
+    #[test]
+    fn parses_zcountinghlt_naive_cuts_from_toml() {
+        let cuts = HToRhoGammaCuts::from_config_toml_str(default_cuts_toml()).expect("parse cuts");
+        assert_eq!(cuts, default_cuts());
+    }
+
+    #[test]
+    fn committed_config_matches_builtin_zcountinghlt_naive_cuts() {
+        let config = include_str!("../../../configs/scouting/h_rho_gamma.toml");
+        let cuts = HToRhoGammaCuts::from_config_toml_str(config).expect("parse committed config");
+        assert_eq!(cuts, default_cuts());
+    }
+
+    #[test]
+    fn malformed_config_reports_toml_parse_error() {
+        let err = HToRhoGammaCuts::from_config_toml_str("[baseline.zcountinghlt_naive")
+            .expect_err("malformed config must fail");
+        assert!(err.to_string().contains("failed to parse TOML"));
+    }
+
+    #[test]
+    fn missing_baseline_field_reports_clear_error() {
+        let err = HToRhoGammaCuts::from_config_toml_str(
+            r#"
+[baseline.zcountinghlt_naive]
+photon_min_pt = 15.0
+"#,
+        )
+        .expect_err("missing fields must fail");
+        assert!(err.to_string().contains("missing field"));
+    }
+
+    #[test]
+    fn invalid_cut_values_report_validation_error() {
+        let err = HToRhoGammaCuts::from_config_toml_str(
+            r#"
+[baseline.zcountinghlt_naive]
+photon_min_pt = 15.0
+pi1_min_pt = 1.0
+pi2_min_pt = 2.0
+max_delta_r_pipi = 0.1
+rho_mass_min = 0.3
+rho_mass_max = 1.2
+min_delta_r_gamma_rho = 1.0
+max_delta_r_gamma_rho = 5.0
+pion_mass = 0.13957039
+rho_mass_target = 0.77526
+higgs_mass_reference = 125.0
+"#,
+        )
+        .expect_err("invalid values must fail");
+        assert!(err.to_string().contains("pi1_min_pt must be >= pi2_min_pt"));
     }
 
     #[test]
