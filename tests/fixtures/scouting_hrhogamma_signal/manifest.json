@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "dataset": "/Test/HToRhoGamma/NANOAODSIM",
+  "instance": "prod/global",
+  "files": [
+    {
+      "lfn": "/store/mc/test/file_000001.root",
+      "source": {
+        "lfn": "/store/mc/test/file_000001.root",
+        "global_xrootd_url": "root://cms-xrd-global.cern.ch//store/mc/test/file_000001.root",
+        "preferred_url": null,
+        "local_path": "/tmp/file_000001.root"
+      },
+      "events": null,
+      "size_bytes": null,
+      "checksum": null,
+      "runs": [],
+      "lumis": []
+    },
+    {
+      "lfn": "/store/mc/test/file_000002.root",
+      "source": {
+        "lfn": "/store/mc/test/file_000002.root",
+        "global_xrootd_url": "root://cms-xrd-global.cern.ch//store/mc/test/file_000002.root",
+        "preferred_url": null,
+        "local_path": "/tmp/file_000002.root"
+      },
+      "events": null,
+      "size_bytes": null,
+      "checksum": null,
+      "runs": [],
+      "lumis": []
+    }
+  ],
+  "provenance": {
+    "resolver": "FixtureResolver",
+    "query": "fixture",
+    "resolved_at_utc": "1970-01-01T00:00:00Z",
+    "command_or_endpoint": "fixture",
+    "nano_das_version": "0.0.0"
+  }
+}

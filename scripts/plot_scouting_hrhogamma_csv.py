@@ -8,6 +8,10 @@ import csv
 import statistics
 import sys
 from pathlib import Path
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python < 3.11 fallback for local users.
+    tomllib = None
 
 
 EVENT_COLUMNS = ("run", "luminosityBlock", "event")
@@ -16,11 +20,21 @@ SUMMARY_COLUMNS = (
     "rho_mass",
     "photon_pt",
     "rho_pt",
+    "pi_plus_pt",
+    "pi_minus_pt",
+    "h_pt",
     "delta_r_pipi",
     "delta_r_gamma_rho",
     "rho_pt_over_photon_pt",
 )
 PLOT_COLUMNS = SUMMARY_COLUMNS
+PLOT_2D_COLUMNS = (
+    ("rho_mass", "h_mass", "h_mass_vs_rho_mass.png"),
+    ("h_mass", "photon_pt", "photon_pt_vs_h_mass.png"),
+    ("h_mass", "rho_pt", "rho_pt_vs_h_mass.png"),
+    ("h_mass", "delta_r_gamma_rho", "delta_r_gamma_rho_vs_h_mass.png"),
+)
+HIGGS_MASS_WINDOW = (100.0, 150.0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,6 +58,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="read at most N candidate rows from the CSV",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="optional HToRhoGamma TOML config for rho-mass summary counts",
     )
     parser.add_argument(
         "--no-plots",
@@ -89,6 +109,31 @@ def numeric_values(rows: list[dict[str, str]], column: str) -> list[float]:
     return values
 
 
+def approximate_quantiles(values: list[float]) -> tuple[float, float, float] | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return (
+        percentile(ordered, 0.25),
+        percentile(ordered, 0.50),
+        percentile(ordered, 0.75),
+    )
+
+
+def percentile(ordered: list[float], fraction: float) -> float:
+    if len(ordered) == 1:
+        return ordered[0]
+    position = fraction * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def count_in_window(values: list[float], low: float, high: float) -> int:
+    return sum(1 for value in values if low < value < high)
+
+
 def event_key(row: dict[str, str]) -> tuple[str, str, str]:
     return tuple(row[name] for name in EVENT_COLUMNS)
 
@@ -103,15 +148,58 @@ def stats_line(column: str, values: list[float]) -> str:
     )
 
 
+def load_rho_mass_window(config_path: Path | None) -> tuple[float, float] | None:
+    if config_path is None:
+        return None
+    if tomllib is None:
+        return load_rho_mass_window_text(config_path)
+    with config_path.open("rb") as handle:
+        config = tomllib.load(handle)
+    try:
+        baseline = config["baseline"]["zcountinghlt_naive"]
+        return (float(baseline["rho_mass_min"]), float(baseline["rho_mass_max"]))
+    except KeyError as exc:
+        raise ValueError(
+            f"{config_path}: missing [baseline.zcountinghlt_naive].{exc.args[0]}"
+        ) from exc
+
+
+def load_rho_mass_window_text(config_path: Path) -> tuple[float, float]:
+    current_table = None
+    values = {}
+    for raw_line in config_path.read_text().splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current_table = line.strip("[]")
+            continue
+        if current_table != "baseline.zcountinghlt_naive" or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if key in {"rho_mass_min", "rho_mass_max"}:
+            values[key] = float(raw_value.strip())
+    try:
+        return (values["rho_mass_min"], values["rho_mass_max"])
+    except KeyError as exc:
+        raise ValueError(
+            f"{config_path}: missing [baseline.zcountinghlt_naive].{exc.args[0]}"
+        ) from exc
+
+
 def build_summary(
     csv_path: Path,
     outdir: Path,
     prefix: str,
     rows: list[dict[str, str]],
     plot_status: str,
+    rho_mass_window: tuple[float, float] | None = None,
 ) -> str:
     unique_events = {event_key(row) for row in rows}
     duplicate_event_entries = len(rows) - len(unique_events)
+    h_mass_values = numeric_values(rows, "h_mass")
+    rho_mass_values = numeric_values(rows, "rho_mass")
     lines = [
         "HToRhoGamma candidate CSV validation",
         f"input_csv: {csv_path}",
@@ -125,6 +213,25 @@ def build_summary(
         lines.append("warning: no candidate rows present")
     for column in SUMMARY_COLUMNS:
         lines.append(stats_line(column, numeric_values(rows, column)))
+    for column, values in (("h_mass", h_mass_values), ("rho_mass", rho_mass_values)):
+        quantiles = approximate_quantiles(values)
+        if quantiles is None:
+            lines.append(f"{column}_quantiles_approx: no values")
+        else:
+            q25, q50, q75 = quantiles
+            lines.append(
+                f"{column}_quantiles_approx: q25={q25:.6f} "
+                f"median={q50:.6f} q75={q75:.6f}"
+            )
+    lines.append(
+        f"h_mass_window_100_150: {count_in_window(h_mass_values, *HIGGS_MASS_WINDOW)}"
+    )
+    if rho_mass_window is None:
+        lines.append("rho_mass_window_config: unavailable")
+    else:
+        low, high = rho_mass_window
+        lines.append(f"rho_mass_window_config: {low:.6f} < rho_mass < {high:.6f}")
+        lines.append(f"rho_mass_window_count: {count_in_window(rho_mass_values, low, high)}")
     lines.append(f"plots: {plot_status}")
     return "\n".join(lines) + "\n"
 
@@ -157,6 +264,20 @@ def plot_histograms(
         figure.savefig(output)
         plt.close(figure)
         written.append(output)
+    for x_column, y_column, filename in PLOT_2D_COLUMNS:
+        x_values = numeric_values(rows, x_column)
+        y_values = numeric_values(rows, y_column)
+        figure, axis = plt.subplots(figsize=(6.0, 4.5))
+        if x_values and y_values:
+            axis.hist2d(x_values, y_values, bins=min(30, max(1, len(x_values))))
+        axis.set_title(f"{prefix}: {filename.removesuffix('.png')}")
+        axis.set_xlabel(x_column)
+        axis.set_ylabel(y_column)
+        figure.tight_layout()
+        output = outdir / filename
+        figure.savefig(output)
+        plt.close(figure)
+        written.append(output)
     return written
 
 
@@ -165,6 +286,7 @@ def main() -> int:
     try:
         rows, fieldnames = read_rows(args.csv_path, args.max_rows)
         require_columns(fieldnames)
+        rho_mass_window = load_rho_mass_window(args.config)
         args.outdir.mkdir(parents=True, exist_ok=True)
 
         plot_status = "skipped (--no-plots)"
@@ -177,7 +299,14 @@ def main() -> int:
                 plot_status = "skipped (matplotlib unavailable)"
                 print("plots skipped: matplotlib is not available", file=sys.stderr)
 
-        summary = build_summary(args.csv_path, args.outdir, args.prefix, rows, plot_status)
+        summary = build_summary(
+            args.csv_path,
+            args.outdir,
+            args.prefix,
+            rows,
+            plot_status,
+            rho_mass_window,
+        )
         summary_path = args.outdir / "summary.txt"
         write_summary(summary_path, summary)
     except OSError as exc:

@@ -183,16 +183,23 @@ rho_pt_over_photon_pt
 ```
 
 If `matplotlib` is available, the script also writes one PNG histogram per
-quantity:
+quantity. The Stage 11 production path uses the expanded physics-check set:
 
 ```text
 h_mass.png
 rho_mass.png
 photon_pt.png
 rho_pt.png
+pi_plus_pt.png
+pi_minus_pt.png
+h_pt.png
 delta_r_pipi.png
 delta_r_gamma_rho.png
 rho_pt_over_photon_pt.png
+h_mass_vs_rho_mass.png
+photon_pt_vs_h_mass.png
+rho_pt_vs_h_mass.png
+delta_r_gamma_rho_vs_h_mass.png
 ```
 
 If `matplotlib` is not installed, `summary.txt` is still written and the script
@@ -278,6 +285,118 @@ Per event, the example:
 The rho is built with the charged pion mass hypothesis, regardless of the
 stored `PFCand_mass`. The source mass is printed only as a diagnostic.
 
+## Dataset-Scale Signal Production
+
+Stage 11 adds a manifest-driven production wrapper for the Run-3 signal sample:
+
+```text
+/GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM
+```
+
+The wrapper is intentionally script-level orchestration. It does not change the
+candidate reconstruction, cuts, or branch mapping. It runs the existing Rust
+example once per selected file, merges the candidate CSVs, optionally writes one
+combined candidate ROOT skim, and invokes the CSV plotting script.
+
+Resolve the DAS dataset through the existing `nano-cli`/`nano-das` path:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --dataset /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir outputs/scouting_hrhogamma_signal \
+  --resolve-das \
+  --max-files 5 \
+  --dry-run
+```
+
+Run a small manifest or local-file test:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --manifest outputs/scouting_hrhogamma_signal/manifest.json \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir outputs/scouting_hrhogamma_signal \
+  --max-files 1
+```
+
+or:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --local-files /path/to/file1.root /path/to/file2.root \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir outputs/scouting_hrhogamma_signal \
+  --max-events-per-file 100
+```
+
+The safe default is to process at most 5 files when `--max-files` is omitted.
+Use `--all-files` only when intentionally running the full resolved sample:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --manifest outputs/scouting_hrhogamma_signal/manifest.json \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir outputs/scouting_hrhogamma_signal_full \
+  --all-files
+```
+
+Useful switches:
+
+- `--manifest path/to/manifest.json`: reuse an existing nano-das manifest.
+- `--resolve-das`: call `cargo run -p nano-cli -- dataset resolve`.
+- `--local-files file1.root file2.root`: run directly over local files.
+- `--xrootd`: use manifest global XRootD URLs instead of local paths/LFNs.
+- `--max-events-per-file N`: cap each example invocation.
+- `--skip-existing`: reuse existing per-file CSV/stdout outputs.
+- `--plots-only`: merge and plot existing per-file CSVs.
+- `--no-root`: skip combined ROOT skim writing.
+- `--no-csv`: skip candidate CSV output and plotting.
+- `--dry-run`: resolve/select files and write the production summary only.
+
+The deterministic output layout is:
+
+```text
+outputs/scouting_hrhogamma_signal/
+manifest.json
+production_summary.txt
+combined_candidates.csv
+combined_candidates.root
+combined_root.stdout.txt
+combined_root.stderr.txt
+plots.stdout.txt
+plots.stderr.txt
+per_file/
+file_000001.stdout.txt
+file_000001.candidates.csv
+file_000002.stdout.txt
+file_000002.candidates.csv
+plots/
+summary.txt
+h_mass.png
+rho_mass.png
+photon_pt.png
+rho_pt.png
+pi_plus_pt.png
+pi_minus_pt.png
+h_pt.png
+delta_r_pipi.png
+delta_r_gamma_rho.png
+rho_pt_over_photon_pt.png
+h_mass_vs_rho_mass.png
+photon_pt_vs_h_mass.png
+rho_pt_vs_h_mass.png
+delta_r_gamma_rho_vs_h_mass.png
+```
+
+`production_summary.txt` records the dataset, manifest path, DAS resolver mode,
+selected file count, per-file processed and accepted counts, combined CSV row
+count, combined ROOT path, and plot status. The plotting summary records
+candidate rows, unique events, duplicate event entries, min/mean/max values,
+approximate `h_mass` and `rho_mass` quantiles, the broad
+`100 < h_mass < 150` count, and the rho-window count from the config when the
+config is readable.
+
 ## Known Limitations
 
 - This runs on NanoAODv15-like signal MC with ordinary `Photon_*` and
@@ -285,23 +404,21 @@ stored `PFCand_mass`. The source mass is printed only as a diagnostic.
   reduced HLT scouting object content.
 - There is no truth matching or generator-level validation.
 - There are no jet, L1, trigger-efficiency, isolation, or category studies.
-- There is no ROOT output, analysis-grade histogram output, workflow
-  integration, DAS integration, or native xrootd reading in this demo.
-- The Python plots are sanity-check histograms over the Stage 7 CSV, not a
-  replacement for an analysis histogramming workflow.
+- The ROOT output is a candidate skim, not a full event skim or analysis ntuple.
+- The Python plots are signal-sample sanity plots over the candidate CSV, not a
+  replacement for a final histogramming or statistical workflow.
+- DAS access depends on the local `dasgoclient`/grid environment used by
+  `nano-cli dataset resolve`.
+- XRootD paths are passed through when requested; native remote-read support is
+  still constrained by the current ROOT reader capabilities.
 - Track-quality cuts using `dz`, `dxy`, or object quality flags are deferred
   because those branches were not part of the confirmed local branch set.
-- The example uses explicit branch names rather than loading the TOML/YAML
-  mapping at runtime.
 
 ## Next Extension Points
 
-- Promote the cut values from `configs/scouting/h_rho_gamma.toml` into runtime
-  configuration for the example.
-- Move candidate-building helpers into reusable library code if another stage
-  needs tests around the physics objects.
-- Add analysis-grade histogram output after the CSV sanity-check layer is
-  validated.
+- Add Condor or workflow integration after the manifest-scale script is stable.
+- Add analysis-grade histogram output after the CSV and candidate-skim checks
+  are validated.
 - Add truth matching and generator-level validation as a separate, explicit
   physics-validation stage.
 - Extend the branch catalogue when true scouting-object files are available.
