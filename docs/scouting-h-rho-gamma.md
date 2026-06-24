@@ -287,16 +287,17 @@ stored `PFCand_mass`. The source mass is printed only as a diagnostic.
 
 ## Dataset-Scale Signal Production
 
-Stage 11 adds a manifest-driven production wrapper for the Run-3 signal sample:
+Stage 11 added a manifest-driven production wrapper for the Run-3 signal sample:
 
 ```text
 /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM
 ```
 
 The wrapper is intentionally script-level orchestration. It does not change the
-candidate reconstruction, cuts, or branch mapping. It runs the existing Rust
-example once per selected file, merges the candidate CSVs, optionally writes one
-combined candidate ROOT skim, and invokes the CSV plotting script.
+candidate reconstruction, cuts, or branch mapping. It builds the Rust examples
+once, runs the compiled HToRhoGamma executable once per selected file, merges
+the candidate CSVs, optionally writes one combined candidate ROOT skim with the
+compiled CSV-to-ROOT helper, and invokes the CSV plotting script.
 
 Resolve the DAS dataset through the existing `nano-cli`/`nano-das` path:
 
@@ -306,6 +307,8 @@ python scripts/run_scouting_hrhogamma_signal.py \
   --config configs/scouting/h_rho_gamma.toml \
   --outdir outputs/scouting_hrhogamma_signal \
   --resolve-das \
+  --xrootd \
+  --download-remote \
   --max-files 5 \
   --dry-run
 ```
@@ -341,12 +344,46 @@ python scripts/run_scouting_hrhogamma_signal.py \
   --all-files
 ```
 
+Native `root://` reading is not implemented in the current Rust ROOT reader.
+For DAS/XRootD production, ask the script to cache remote files locally before
+processing:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --dataset /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir outputs/scouting_hrhogamma_signal_cached \
+  --resolve-das \
+  --xrootd \
+  --download-remote \
+  --max-files 1 \
+  --max-events-per-file 100
+```
+
+Remote inputs beginning with `root://` or `/store/` require
+`--download-remote`. A `/store/...` LFN is converted to the global redirector
+form `root://cms-xrd-global.cern.ch//store/...` for `xrdcp`. Cached files are
+named deterministically from the file index, a short hash of the remote source,
+and the source basename, so repeated runs can reuse non-empty cache files.
+
 Useful switches:
 
 - `--manifest path/to/manifest.json`: reuse an existing nano-das manifest.
 - `--resolve-das`: call `cargo run -p nano-cli -- dataset resolve`.
 - `--local-files file1.root file2.root`: run directly over local files.
 - `--xrootd`: use manifest global XRootD URLs instead of local paths/LFNs.
+- `--download-remote`: copy `root://` or `/store/` inputs into the local cache
+  before running the Rust reader.
+- `--cache-dir path`: choose the cache directory; defaults to
+  `<outdir>/cache`.
+- `--download-tool xrdcp`: choose the remote copy command.
+- `--download-timeout SECONDS`: cap each remote copy attempt.
+- `--force-download`: overwrite an existing non-empty cached file.
+- `--clean-cache`: remove a cached ROOT file after successful processing.
+- `--keep-cache`: explicit spelling of the default cache policy.
+- `--release`: build and run `target/release/examples/*`.
+- `--no-build`: skip compilation and require existing example binaries.
+- `--use-cargo-run`: restore per-file `cargo run` behavior for debugging.
 - `--max-events-per-file N`: cap each example invocation.
 - `--skip-existing`: reuse existing per-file CSV/stdout outputs.
 - `--plots-only`: merge and plot existing per-file CSVs.
@@ -366,7 +403,15 @@ combined_root.stdout.txt
 combined_root.stderr.txt
 plots.stdout.txt
 plots.stderr.txt
+build_scouting_h_rho_gamma.stdout.txt
+build_scouting_h_rho_gamma.stderr.txt
+build_scouting_h_rho_gamma_csv_to_root.stdout.txt
+build_scouting_h_rho_gamma_csv_to_root.stderr.txt
+cache/
+file_000001_<hash>_<basename>.root
 per_file/
+file_000001.download.stdout.txt
+file_000001.download.stderr.txt
 file_000001.stdout.txt
 file_000001.candidates.csv
 file_000002.stdout.txt
@@ -390,10 +435,12 @@ delta_r_gamma_rho_vs_h_mass.png
 ```
 
 `production_summary.txt` records the dataset, manifest path, DAS resolver mode,
-selected file count, per-file processed and accepted counts, combined CSV row
-count, combined ROOT path, and plot status. The plotting summary records
-candidate rows, unique events, duplicate event entries, min/mean/max values,
-approximate `h_mass` and `rho_mass` quantiles, the broad
+selected file count, execution binary, build mode, cache directory, download
+tool, cache policy, per-file original and cached inputs, per-file download and
+run statuses, per-file processed and accepted counts, combined CSV row count,
+combined ROOT path, and plot status. The plotting summary records candidate
+rows, unique events, duplicate event entries, min/mean/max values, approximate
+`h_mass` and `rho_mass` quantiles, the broad
 `100 < h_mass < 150` count, and the rho-window count from the config when the
 config is readable.
 
@@ -409,8 +456,9 @@ config is readable.
   replacement for a final histogramming or statistical workflow.
 - DAS access depends on the local `dasgoclient`/grid environment used by
   `nano-cli dataset resolve`.
-- XRootD paths are passed through when requested; native remote-read support is
-  still constrained by the current ROOT reader capabilities.
+- Native remote ROOT reading is not implemented in `nano-rootio`; DAS/XRootD
+  production currently depends on `xrdcp`-style local caching with valid grid
+  credentials and reachable redirectors.
 - Track-quality cuts using `dz`, `dxy`, or object quality flags are deferred
   because those branches were not part of the confirmed local branch set.
 

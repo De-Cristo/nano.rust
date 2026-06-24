@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -20,6 +22,13 @@ DEFAULT_DATASET = (
 DEFAULT_CONFIG = Path("configs/scouting/h_rho_gamma.toml")
 DEFAULT_OUTDIR = Path("outputs/scouting_hrhogamma_signal")
 DEFAULT_SAFE_MAX_FILES = 5
+DEFAULT_DOWNLOAD_TOOL = "xrdcp"
+DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 3600
+GLOBAL_XROOTD_HOST = "root://cms-xrd-global.cern.ch/"
+REMOTE_READING_UNSUPPORTED = (
+    "remote ROOT reading is not supported by the current Rust reader; "
+    "rerun with --download-remote to cache files locally first"
+)
 CSV_HEADER = (
     "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,"
     "pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,"
@@ -35,16 +44,33 @@ class InputFile:
     lfn: str | None = None
 
 
+@dataclass(frozen=True)
+class InputPlan:
+    original_input: str
+    run_input: str
+    cached_input: Path | None
+    download_source: str | None
+
+
+@dataclass(frozen=True)
+class Binaries:
+    reco: Path | None
+    csv_to_root: Path | None
+    build_mode: str
+
+
 @dataclass
 class FileResult:
     index: int
-    input_path: str
+    original_input: str
+    cached_input: Path | None
     stdout_path: Path
     csv_path: Path | None
     processed_events: int
     accepted_candidates: int
     csv_rows: int
-    status: str
+    download_status: str
+    run_status: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,6 +118,58 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-csv", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--release",
+        action="store_true",
+        help="build and run release example binaries",
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="assume example binaries already exist",
+    )
+    parser.add_argument(
+        "--use-cargo-run",
+        action="store_true",
+        help="fall back to cargo run per file instead of build-once execution",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="directory for cached remote ROOT files",
+    )
+    parser.add_argument(
+        "--download-remote",
+        action="store_true",
+        help="copy root:// or /store inputs into --cache-dir before reading",
+    )
+    parser.add_argument(
+        "--download-tool",
+        default=DEFAULT_DOWNLOAD_TOOL,
+        help="remote copy tool, normally xrdcp",
+    )
+    parser.add_argument(
+        "--keep-cache",
+        action="store_true",
+        help="keep cached ROOT files after processing",
+    )
+    parser.add_argument(
+        "--clean-cache",
+        action="store_true",
+        help="remove cached ROOT files after successful per-file processing",
+    )
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="overwrite existing non-empty cached files",
+    )
+    parser.add_argument(
+        "--download-timeout",
+        type=int,
+        default=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+        help="seconds before remote file downloads time out",
+    )
+    parser.add_argument(
         "--per-file-dir",
         type=Path,
         default=None,
@@ -138,6 +216,106 @@ def validate_source_args(args: argparse.Namespace) -> None:
         raise ValueError("--plots-only requires CSV input")
     if args.no_csv and not args.no_root:
         raise ValueError("--no-csv cannot write a combined ROOT skim")
+    if args.clean_cache and args.keep_cache:
+        raise ValueError("choose at most one of --clean-cache or --keep-cache")
+    if args.download_timeout < 1:
+        raise ValueError("--download-timeout must be positive")
+    if args.no_build and args.use_cargo_run:
+        raise ValueError("--no-build cannot be combined with --use-cargo-run")
+
+
+def target_profile(args: argparse.Namespace) -> str:
+    return "release" if args.release else "debug"
+
+
+def example_binary(name: str, args: argparse.Namespace) -> Path:
+    return repo_root() / "target" / target_profile(args) / "examples" / name
+
+
+def build_example(name: str, args: argparse.Namespace, outdir: Path) -> Path:
+    binary = example_binary(name, args)
+    if args.no_build:
+        if not binary.exists():
+            raise FileNotFoundError(f"required example binary does not exist: {binary}")
+        return binary
+
+    command = ["cargo", "build", "-p", "nano-io", "--example", name]
+    if args.release:
+        command.append("--release")
+    result = subprocess.run(
+        command,
+        cwd=repo_root(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    (outdir / f"build_{name}.stdout.txt").write_text(result.stdout)
+    (outdir / f"build_{name}.stderr.txt").write_text(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"build failed with exit code {result.returncode}: {shell_join(command)}\n"
+            f"{result.stderr}"
+        )
+    if not binary.exists():
+        raise FileNotFoundError(f"build succeeded but binary was not found: {binary}")
+    return binary
+
+
+def prepare_binaries(args: argparse.Namespace, outdir: Path) -> Binaries:
+    if args.use_cargo_run:
+        return Binaries(None, None, "cargo-run")
+    mode = target_profile(args)
+    reco = None if args.plots_only else build_example("scouting_h_rho_gamma", args, outdir)
+    csv_to_root = None
+    if not args.no_root and not args.no_csv:
+        csv_to_root = build_example("scouting_h_rho_gamma_csv_to_root", args, outdir)
+    return Binaries(reco, csv_to_root, mode)
+
+
+def build_cache_dir(args: argparse.Namespace, outdir: Path) -> Path:
+    return args.cache_dir if args.cache_dir is not None else outdir / "cache"
+
+
+def is_remote_input(path: str) -> bool:
+    return path.startswith("root://") or path.startswith("/store/")
+
+
+def remote_source_for_download(path: str) -> str:
+    if path.startswith("root://"):
+        return path
+    if path.startswith("/store/"):
+        return f"{GLOBAL_XROOTD_HOST}{path}"
+    return path
+
+
+def cache_path_for_input(cache_dir: Path, index: int, input_path: str) -> Path:
+    basename = posixpath.basename(input_path.rstrip("/")) or f"input_{index:06d}.root"
+    digest = hashlib.sha1(input_path.encode("utf-8")).hexdigest()[:12]
+    return cache_dir / f"file_{index:06d}_{digest}_{basename}"
+
+
+def effective_input_plan(
+    index: int,
+    input_file: InputFile,
+    cache_dir: Path,
+    download_remote: bool,
+) -> InputPlan:
+    if not is_remote_input(input_file.path):
+        return InputPlan(
+            original_input=input_file.path,
+            run_input=input_file.path,
+            cached_input=None,
+            download_source=None,
+        )
+    if not download_remote:
+        raise ValueError(REMOTE_READING_UNSUPPORTED)
+    cached_input = cache_path_for_input(cache_dir, index, input_file.path)
+    return InputPlan(
+        original_input=input_file.path,
+        run_input=str(cached_input),
+        cached_input=cached_input,
+        download_source=remote_source_for_download(input_file.path),
+    )
 
 
 def resolve_das_manifest(args: argparse.Namespace, outdir: Path, limit: int | None) -> Path:
@@ -240,51 +418,113 @@ def parse_count(stdout: str, key: str) -> int:
     return 0
 
 
-def run_file(
+def download_remote_input(
     args: argparse.Namespace,
-    input_file: InputFile,
+    plan: InputPlan,
     index: int,
     outdir: Path,
-    per_file_dir: Path,
-) -> FileResult:
-    stdout_path, csv_path = per_file_paths(outdir, index, args.per_file_dir or per_file_dir)
-    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+) -> str:
+    if plan.cached_input is None or plan.download_source is None:
+        return "not needed"
+    if plan.cached_input.exists() and plan.cached_input.stat().st_size > 0 and not args.force_download:
+        return "reused"
 
-    if args.plots_only:
-        rows = count_csv_rows(csv_path)
-        return FileResult(index, input_file.path, stdout_path, csv_path, 0, rows, rows, "plots-only")
-
-    if not input_file.path.startswith("root://") and not Path(input_file.path).exists():
-        raise FileNotFoundError(f"input file does not exist: {input_file.path}")
-
-    if args.skip_existing and csv_path.exists() and stdout_path.exists():
-        stdout = stdout_path.read_text()
-        return FileResult(
-            index,
-            input_file.path,
-            stdout_path,
-            csv_path,
-            parse_count(stdout, "processed_events"),
-            parse_count(stdout, "accepted_candidates"),
-            count_csv_rows(csv_path),
-            "skipped",
+    plan.cached_input.parent.mkdir(parents=True, exist_ok=True)
+    command = [args.download_tool, "-f", plan.download_source, str(plan.cached_input)]
+    result = subprocess.run(
+        command,
+        cwd=repo_root(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=args.download_timeout,
+    )
+    download_stdout = outdir / "per_file" / f"file_{index:06d}.download.stdout.txt"
+    download_stderr = outdir / "per_file" / f"file_{index:06d}.download.stderr.txt"
+    download_stdout.write_text(result.stdout)
+    download_stderr.write_text(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"file {index} download failed with exit code {result.returncode}: "
+            f"{plan.download_source}\ncommand: {shell_join(command)}\nstderr: {download_stderr}"
         )
+    if not plan.cached_input.exists() or plan.cached_input.stat().st_size == 0:
+        raise RuntimeError(f"file {index} download produced an empty cache file: {plan.cached_input}")
+    return "downloaded"
 
-    command = [
-        "cargo",
-        "run",
-        "-p",
-        "nano-io",
-        "--example",
-        "scouting_h_rho_gamma",
-        "--",
-        input_file.path,
-    ]
+
+def reco_command(
+    args: argparse.Namespace,
+    binaries: Binaries,
+    run_input: str,
+    csv_path: Path,
+) -> list[str]:
+    if args.use_cargo_run:
+        command = ["cargo", "run", "-p", "nano-io", "--example", "scouting_h_rho_gamma"]
+        if args.release:
+            command.append("--release")
+        command.extend(["--", run_input])
+    else:
+        if binaries.reco is None:
+            raise ValueError("scouting_h_rho_gamma binary was not prepared")
+        command = [str(binaries.reco), run_input]
+
     if args.max_events_per_file is not None:
         command.append(str(args.max_events_per_file))
     command.append(str(args.config))
     if not args.no_csv:
         command.extend(["--csv", str(csv_path)])
+    return command
+
+
+def run_file(
+    args: argparse.Namespace,
+    binaries: Binaries,
+    input_file: InputFile,
+    index: int,
+    outdir: Path,
+    per_file_dir: Path,
+    cache_dir: Path,
+) -> FileResult:
+    stdout_path, csv_path = per_file_paths(outdir, index, args.per_file_dir or per_file_dir)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    plan = effective_input_plan(index, input_file, cache_dir, args.download_remote)
+
+    if args.plots_only:
+        rows = count_csv_rows(csv_path)
+        return FileResult(
+            index,
+            plan.original_input,
+            plan.cached_input,
+            stdout_path,
+            csv_path,
+            0,
+            rows,
+            rows,
+            "not run (plots-only)",
+            "plots-only",
+        )
+
+    if args.skip_existing and csv_path.exists() and stdout_path.exists():
+        stdout = stdout_path.read_text()
+        return FileResult(
+            index,
+            plan.original_input,
+            plan.cached_input,
+            stdout_path,
+            csv_path,
+            parse_count(stdout, "processed_events"),
+            parse_count(stdout, "accepted_candidates"),
+            count_csv_rows(csv_path),
+            "not run (skip-existing)",
+            "skipped",
+        )
+
+    download_status = download_remote_input(args, plan, index, outdir)
+    if plan.cached_input is None and not Path(plan.run_input).exists():
+        raise FileNotFoundError(f"input file does not exist: {plan.run_input}")
+
+    command = reco_command(args, binaries, plan.run_input, csv_path)
 
     result = subprocess.run(
         command,
@@ -304,14 +544,19 @@ def run_file(
             f"command: {shell_join(command)}\nstdout: {stdout_path}"
         )
 
+    if args.clean_cache and plan.cached_input is not None and plan.cached_input.exists():
+        plan.cached_input.unlink()
+
     return FileResult(
         index,
-        input_file.path,
+        plan.original_input,
+        plan.cached_input,
         stdout_path,
         None if args.no_csv else csv_path,
         parse_count(result.stdout, "processed_events"),
         parse_count(result.stdout, "accepted_candidates"),
         0 if args.no_csv else count_csv_rows(csv_path),
+        download_status,
         "ok",
     )
 
@@ -346,18 +591,28 @@ def merge_candidate_csvs(csv_paths: list[Path], output: Path) -> int:
     return rows_written
 
 
-def write_combined_root(combined_csv: Path, combined_root: Path) -> str:
-    command = [
-        "cargo",
-        "run",
-        "-p",
-        "nano-io",
-        "--example",
-        "scouting_h_rho_gamma_csv_to_root",
-        "--",
-        str(combined_csv),
-        str(combined_root),
-    ]
+def write_combined_root(
+    args: argparse.Namespace,
+    binaries: Binaries,
+    combined_csv: Path,
+    combined_root: Path,
+) -> str:
+    if args.use_cargo_run:
+        command = [
+            "cargo",
+            "run",
+            "-p",
+            "nano-io",
+            "--example",
+            "scouting_h_rho_gamma_csv_to_root",
+        ]
+        if args.release:
+            command.append("--release")
+        command.extend(["--", str(combined_csv), str(combined_root)])
+    else:
+        if binaries.csv_to_root is None:
+            raise ValueError("scouting_h_rho_gamma_csv_to_root binary was not prepared")
+        command = [str(binaries.csv_to_root), str(combined_csv), str(combined_root)]
     result = subprocess.run(
         command,
         cwd=repo_root(),
@@ -407,14 +662,17 @@ def run_plots(args: argparse.Namespace, combined_csv: Path, plots_dir: Path) -> 
 def write_summary(
     path: Path,
     args: argparse.Namespace,
+    binaries: Binaries,
     dataset: str,
     manifest_path: Path | None,
     resolved_count: int,
     selected_inputs: list[InputFile],
+    input_plans: list[InputPlan],
     results: list[FileResult],
     combined_csv_rows: int,
     plot_status: str,
     root_status: str,
+    cache_dir: Path,
 ) -> None:
     total_processed = sum(result.processed_events for result in results)
     total_candidates = sum(result.accepted_candidates for result in results)
@@ -429,6 +687,15 @@ def write_summary(
         f"manifest: {manifest_path if manifest_path is not None else 'none'}",
         f"das_resolution: {'nano-cli dataset resolve' if args.resolve_das else 'not requested'}",
         f"xrootd: {args.xrootd}",
+        f"execution_binary: {binaries.reco if binaries.reco is not None else 'cargo run'}",
+        f"csv_to_root_binary: {binaries.csv_to_root if binaries.csv_to_root is not None else 'cargo run' if not args.no_root and not args.no_csv else 'not needed'}",
+        f"build_mode: {binaries.build_mode}",
+        f"cache_dir: {cache_dir}",
+        f"download_remote: {args.download_remote}",
+        f"download_tool: {args.download_tool}",
+        f"download_timeout: {args.download_timeout}",
+        f"cache_policy: {'clean after successful file' if args.clean_cache else 'keep cached files'}",
+        f"force_download: {args.force_download}",
         f"resolved_files: {resolved_count}",
         f"selected_files: {len(selected_inputs)}",
         f"max_files: {'all' if args.all_files else safe_file_limit(args)}",
@@ -447,17 +714,24 @@ def write_summary(
     if args.dry_run:
         lines.append(f"would_run_files: {len(selected_inputs)}")
         lines.append("would_run_inputs:")
-        for input_file in selected_inputs:
-            lines.append(f"  {input_file.label} {input_file.path}")
+        for input_file, plan in zip(selected_inputs, input_plans):
+            lines.append(
+                f"  {input_file.label} original_input={plan.original_input} "
+                f"run_input={plan.run_input} "
+                f"cached_input={plan.cached_input if plan.cached_input is not None else 'none'} "
+                f"download_source={plan.download_source if plan.download_source is not None else 'none'}"
+            )
     else:
         lines.append("per_file:")
         for result in results:
             lines.append(
                 f"  file_{result.index:06d} candidates={result.csv_rows} "
-                f"status={result.status} "
+                f"download_status={result.download_status} "
+                f"run_status={result.run_status} "
                 f"processed={result.processed_events} "
                 f"accepted={result.accepted_candidates} "
-                f"input={result.input_path} "
+                f"original_input={result.original_input} "
+                f"cached_input={result.cached_input if result.cached_input is not None else 'none'} "
                 f"stdout={result.stdout_path}"
             )
     path.write_text("\n".join(lines) + "\n")
@@ -471,6 +745,7 @@ def main() -> int:
         outdir = args.outdir
         per_file_dir = outdir / "per_file"
         plots_dir = outdir / "plots"
+        cache_dir = build_cache_dir(args, outdir)
         outdir.mkdir(parents=True, exist_ok=True)
         per_file_dir.mkdir(parents=True, exist_ok=True)
 
@@ -485,6 +760,10 @@ def main() -> int:
             dataset, inputs = local_inputs(args.local_files)
 
         selected_inputs = select_inputs(inputs, limit)
+        input_plans = [
+            effective_input_plan(index, input_file, cache_dir, args.download_remote)
+            for index, input_file in enumerate(selected_inputs, start=1)
+        ]
         print(f"resolved files: {len(inputs)}")
         print(f"selected files: {len(selected_inputs)}")
         if not args.all_files and args.max_files is None:
@@ -495,20 +774,27 @@ def main() -> int:
             write_summary(
                 summary_path,
                 args,
+                Binaries(None, None, "dry-run"),
                 dataset,
                 manifest_path,
                 len(inputs),
                 selected_inputs,
+                input_plans,
                 [],
                 0,
                 "not run (dry-run)",
                 "not run (dry-run)",
+                cache_dir,
             )
             print(f"summary: {summary_path}")
             return 0
 
+        if args.download_remote:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        binaries = prepare_binaries(args, outdir)
+
         results = [
-            run_file(args, input_file, index, outdir, per_file_dir)
+            run_file(args, binaries, input_file, index, outdir, per_file_dir, cache_dir)
             for index, input_file in enumerate(selected_inputs, start=1)
         ]
 
@@ -524,22 +810,25 @@ def main() -> int:
                 root_status = "disabled (--no-root)"
             else:
                 combined_root = outdir / "combined_candidates.root"
-                write_combined_root(combined_csv, combined_root)
+                write_combined_root(args, binaries, combined_csv, combined_root)
                 root_status = str(combined_root)
 
         write_summary(
             summary_path,
             args,
+            binaries,
             dataset,
             manifest_path,
             len(inputs),
             selected_inputs,
+            input_plans,
             results,
             combined_csv_rows,
             plot_status,
             root_status,
+            cache_dir,
         )
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

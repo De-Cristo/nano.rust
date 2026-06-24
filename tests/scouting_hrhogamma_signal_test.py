@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util
 from pathlib import Path
 
 
@@ -12,8 +13,90 @@ FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal"
 PER_FILE_DIR = FIXTURE_DIR / "per_file"
 MANIFEST = FIXTURE_DIR / "manifest.json"
 
+SPEC = importlib.util.spec_from_file_location("run_signal", SCRIPT)
+run_signal = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+sys.modules["run_signal"] = run_signal
+SPEC.loader.exec_module(run_signal)
+
 
 class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
+    def test_remote_detection_recognizes_root_urls_and_store_lfns(self):
+        self.assertTrue(run_signal.is_remote_input("root://cms-xrd-global.cern.ch//store/a.root"))
+        self.assertTrue(run_signal.is_remote_input("/store/mc/a.root"))
+        self.assertFalse(run_signal.is_remote_input("/tmp/a.root"))
+
+    def test_store_lfn_converts_to_global_xrootd_url(self):
+        self.assertEqual(
+            run_signal.remote_source_for_download("/store/mc/a.root"),
+            "root://cms-xrd-global.cern.ch//store/mc/a.root",
+        )
+        self.assertEqual(
+            run_signal.remote_source_for_download("root://host//store/mc/a.root"),
+            "root://host//store/mc/a.root",
+        )
+
+    def test_cache_path_is_deterministic_and_collision_safe(self):
+        cache_dir = Path("/tmp/cache")
+        first = run_signal.cache_path_for_input(
+            cache_dir,
+            1,
+            "root://cms-xrd-global.cern.ch//store/mc/abc.root",
+        )
+        second = run_signal.cache_path_for_input(
+            cache_dir,
+            1,
+            "root://cms-xrd-global.cern.ch//store/other/abc.root",
+        )
+        repeat = run_signal.cache_path_for_input(
+            cache_dir,
+            1,
+            "root://cms-xrd-global.cern.ch//store/mc/abc.root",
+        )
+
+        self.assertEqual(first, repeat)
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.parent, cache_dir)
+        self.assertTrue(first.name.startswith("file_000001_"))
+        self.assertTrue(first.name.endswith("_abc.root"))
+
+    def test_local_files_path_remains_unchanged(self):
+        self.assertEqual(
+            run_signal.effective_input_plan(
+                1,
+                run_signal.InputFile("file_000001", "/tmp/file_000001.root"),
+                Path("/tmp/cache"),
+                download_remote=False,
+            ).run_input,
+            "/tmp/file_000001.root",
+        )
+
+    def test_remote_without_download_fails_clearly(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "remote ROOT reading is not supported by the current Rust reader; "
+            "rerun with --download-remote to cache files locally first",
+        ):
+            run_signal.effective_input_plan(
+                1,
+                run_signal.InputFile("file_000001", "/store/mc/file.root"),
+                Path("/tmp/cache"),
+                download_remote=False,
+            )
+
+    def test_remote_with_download_plans_cached_input(self):
+        plan = run_signal.effective_input_plan(
+            1,
+            run_signal.InputFile("file_000001", "/store/mc/file.root"),
+            Path("/tmp/cache"),
+            download_remote=True,
+        )
+
+        self.assertEqual(plan.original_input, "/store/mc/file.root")
+        self.assertEqual(plan.download_source, "root://cms-xrd-global.cern.ch//store/mc/file.root")
+        self.assertEqual(plan.run_input, str(plan.cached_input))
+        self.assertTrue(str(plan.cached_input).startswith("/tmp/cache/file_000001_"))
+
     def test_dry_run_from_manifest_reports_limited_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp) / "signal"
@@ -45,6 +128,67 @@ class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
             self.assertIn("selected_files: 1", text)
             self.assertIn("would_run_files: 1", text)
             self.assertIn("/tmp/file_000001.root", text)
+
+    def test_dry_run_reports_remote_cache_download_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--manifest",
+                    str(MANIFEST),
+                    "--outdir",
+                    str(outdir),
+                    "--max-files",
+                    "1",
+                    "--xrootd",
+                    "--download-remote",
+                    "--dry-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "production_summary.txt").read_text()
+            self.assertIn("download_remote: True", text)
+            self.assertIn(f"cache_dir: {outdir / 'cache'}", text)
+            self.assertIn("would_run_inputs:", text)
+            self.assertIn("original_input=root://", text)
+            self.assertIn("cached_input=", text)
+            self.assertIn("download_source=root://", text)
+
+    def test_remote_dry_run_without_download_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--manifest",
+                    str(MANIFEST),
+                    "--outdir",
+                    str(outdir),
+                    "--max-files",
+                    "1",
+                    "--xrootd",
+                    "--dry-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "remote ROOT reading is not supported by the current Rust reader; "
+                "rerun with --download-remote to cache files locally first",
+                result.stderr,
+            )
 
     def test_merge_command_keeps_one_header_and_writes_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
