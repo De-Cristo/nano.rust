@@ -1,5 +1,7 @@
 use std::env;
 use std::error::Error;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use nano_core::{BranchSchema, BranchSpec, BranchType};
@@ -20,9 +22,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let schema = scouting_schema()?;
     let (cuts, cut_source) = load_cuts(&options)?;
+    let mut csv_writer = options
+        .csv_path
+        .as_deref()
+        .map(CandidateCsvWriter::create)
+        .transpose()?;
     println!("input: {}", options.input.display());
     println!("max_events: {}", display_limit(options.max_events));
     println!("cut_source: {cut_source}");
+    println!(
+        "candidate_output: {}",
+        options
+            .csv_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
     println!("branch_schema: ok");
     println!("branch_mapping: ScoutingPhoton=Photon_*, ScoutingChargedCandidate=PFCand_*");
     println!(
@@ -41,7 +56,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         cuts.max_delta_r_gamma_rho
     );
 
-    let report = analyze(&options.input, &schema, &cuts, options.max_events)?;
+    let report = analyze(
+        &options.input,
+        &schema,
+        &cuts,
+        options.max_events,
+        csv_writer.as_mut(),
+    )?;
     print_report(&report);
     Ok(())
 }
@@ -53,17 +74,32 @@ struct Options {
     config_path: PathBuf,
     config_display: String,
     config_explicit: bool,
+    csv_path: Option<PathBuf>,
 }
 
 impl Options {
     fn parse() -> Result<Option<Self>, Box<dyn Error>> {
-        let mut positional = env::args().skip(1).collect::<Vec<_>>();
-        if positional.iter().any(|arg| arg == "-h" || arg == "--help") {
-            return Ok(None);
+        let mut positional = Vec::new();
+        let mut csv_path = None;
+
+        let mut args = env::args().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "-h" | "--help" => return Ok(None),
+                "--csv" => {
+                    let value = args.next().ok_or("missing value after --csv")?;
+                    csv_path = Some(PathBuf::from(value));
+                }
+                _ if arg.starts_with("--") => {
+                    return Err(format!("unknown option: {arg}").into());
+                }
+                _ => positional.push(arg),
+            }
         }
+
         if positional.len() > 3 {
             return Err(
-                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml]".into(),
+                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv]".into(),
             );
         }
 
@@ -110,12 +146,13 @@ impl Options {
             config_path,
             config_display,
             config_explicit,
+            csv_path,
         }))
     }
 }
 
 fn print_usage() {
-    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml]");
+    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv]");
     println!("or set {ENV_INPUT}=<input.root>");
     println!("default config: {DEFAULT_CONFIG_PATH}");
 }
@@ -173,6 +210,7 @@ fn analyze(
     schema: &BranchSchema,
     cuts: &HToRhoGammaCuts,
     max_events: Option<usize>,
+    mut csv_writer: Option<&mut CandidateCsvWriter>,
 ) -> Result<Report, Box<dyn Error>> {
     let mut report = Report::default();
     let events = events_chunked(input, schema, CHUNK_SIZE)?;
@@ -264,21 +302,30 @@ fn analyze(
         report.cutflow.gamma_rho_delta_r += 1;
         report.cutflow.h_candidate += 1;
 
+        let gamma_rho_delta_r = reco
+            .gamma_rho_delta_r
+            .expect("H candidate requires gamma-rho deltaR");
+        let candidate = CandidateSummary {
+            run,
+            luminosity_block,
+            event: event_number,
+            gamma_rho_delta_r,
+            rho_over_gamma_pt: h.rho.pt / h.gamma.pt,
+            h,
+        };
+
+        if let Some(writer) = csv_writer.as_deref_mut() {
+            writer.write_candidate(&candidate)?;
+        }
+
         if report.candidates.len() < MAX_PRINTED_CANDIDATES {
-            let gamma_rho_delta_r = reco
-                .gamma_rho_delta_r
-                .expect("H candidate requires gamma-rho deltaR");
-            report.candidates.push(CandidateSummary {
-                run,
-                luminosity_block,
-                event: event_number,
-                gamma_rho_delta_r,
-                rho_over_gamma_pt: h.rho.pt / h.gamma.pt,
-                h,
-            });
+            report.candidates.push(candidate);
         }
     }
 
+    if let Some(writer) = csv_writer.as_deref_mut() {
+        writer.flush()?;
+    }
     Ok(report)
 }
 
@@ -402,4 +449,59 @@ struct CandidateSummary {
     h: HCand,
     gamma_rho_delta_r: f64,
     rho_over_gamma_pt: f64,
+}
+
+struct CandidateCsvWriter {
+    writer: BufWriter<File>,
+}
+
+impl CandidateCsvWriter {
+    fn create(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let file = File::create(path)
+            .map_err(|err| format!("failed to create candidate CSV {}: {err}", path.display()))?;
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "{}", candidate_csv_header())?;
+        Ok(Self { writer })
+    }
+
+    fn write_candidate(&mut self, candidate: &CandidateSummary) -> Result<(), Box<dyn Error>> {
+        let h = &candidate.h;
+        writeln!(
+            self.writer,
+            "{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8}",
+            candidate.run,
+            candidate.luminosity_block,
+            candidate.event,
+            h.gamma.pt,
+            h.gamma.eta,
+            h.gamma.phi,
+            h.rho.pi_plus.pt,
+            h.rho.pi_plus.eta,
+            h.rho.pi_plus.phi,
+            h.rho.pi_minus.pt,
+            h.rho.pi_minus.eta,
+            h.rho.pi_minus.phi,
+            h.rho.mass,
+            h.rho.pt,
+            h.rho.eta,
+            h.rho.phi,
+            h.mass,
+            h.pt,
+            h.eta,
+            h.phi,
+            h.rho.pipi_delta_r,
+            candidate.gamma_rho_delta_r,
+            candidate.rho_over_gamma_pt
+        )?;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Box<dyn Error>> {
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+fn candidate_csv_header() -> &'static str {
+    "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt"
 }

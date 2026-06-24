@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -15,6 +16,16 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
         eprintln!("SKIP: {input} absent");
         return;
     }
+    let csv_path = env::temp_dir().join(format!(
+        "scouting_h_rho_gamma_example_{}_{}.csv",
+        std::process::id(),
+        "candidates"
+    ));
+    let _ = fs::remove_file(&csv_path);
+    let csv_arg = csv_path
+        .to_str()
+        .expect("temporary CSV path should be UTF-8")
+        .to_string();
 
     let output = Command::new(option_env!("CARGO").unwrap_or("cargo"))
         .args([
@@ -26,7 +37,9 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
             "--quiet",
             "--",
             &input,
-            "50",
+            "100",
+            "--csv",
+            &csv_arg,
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
@@ -52,4 +65,19 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
     assert!(stdout.contains("cutflow:"), "stdout:\n{stdout}");
     assert!(stdout.contains("processed_events:"), "stdout:\n{stdout}");
     assert!(stdout.contains("pfcand_pions:"), "stdout:\n{stdout}");
+    assert!(stdout.contains("candidate_output: "), "stdout:\n{stdout}");
+
+    let csv = fs::read_to_string(&csv_path).expect("read candidate CSV");
+    let mut lines = csv.lines();
+    let header = lines.next().expect("CSV header");
+    assert!(header.contains("run,luminosityBlock,event"), "CSV:\n{csv}");
+    assert!(header.contains("photon_pt"), "CSV:\n{csv}");
+    assert!(header.contains("rho_pt_over_photon_pt"), "CSV:\n{csv}");
+    if input.ends_with("48f9579f-2a00-469f-864e-4bc4f064984e.root") {
+        assert!(
+            lines.count() > 0,
+            "expected candidate rows in known local file"
+        );
+    }
+    let _ = fs::remove_file(csv_path);
 }

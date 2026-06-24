@@ -36,6 +36,12 @@ An optional third positional argument supplies a config path:
 cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
 ```
 
+Optional CSV output writes every accepted H candidate:
+
+```bash
+cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv
+```
+
 If no config path is supplied, the example loads
 `configs/scouting/h_rho_gamma.toml` by default. If that default file is absent,
 it falls back to the built-in `HToRhoGammaCuts::zcountinghlt_naive()` values.
@@ -65,6 +71,12 @@ With an explicit config:
 scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
 ```
 
+With CSV output:
+
+```bash
+scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv
+```
+
 Or with the environment fallback:
 
 ```bash
@@ -79,6 +91,7 @@ The example prints plain text. The important sections are:
 - `max_events`: either `all` or the supplied event limit.
 - `cut_source`: the TOML config table used for cut values, or the built-in
   fallback if the default config file is absent.
+- `candidate_output`: either `none` or the CSV path supplied with `--csv`.
 - `branch_schema`: confirms the requested `nano_io::events_chunked` schema was
   built.
 - `branch_mapping`: documents the semantic scouting mapping used by this first
@@ -93,6 +106,43 @@ The example prints plain text. The important sections are:
 - `cutflow`: event counts after each selection step.
 - `first_candidates`: up to 10 candidate summaries with photon, pion, rho, and
   H-candidate kinematics.
+
+By default, the example remains print-only. With `--csv`, the text summary is
+still printed and every accepted H candidate is also written to the CSV file.
+The printed `first_candidates` section is still capped at 10 candidates.
+
+## CSV Candidate Output
+
+CSV output is candidate-level and contains one row for every accepted H
+candidate. It is not an event skim, ROOT ntuple, or histogram file.
+
+The stable columns are:
+
+```text
+run
+luminosityBlock
+event
+photon_pt
+photon_eta
+photon_phi
+pi_plus_pt
+pi_plus_eta
+pi_plus_phi
+pi_minus_pt
+pi_minus_eta
+pi_minus_phi
+rho_mass
+rho_pt
+rho_eta
+rho_phi
+h_mass
+h_pt
+h_eta
+h_phi
+delta_r_pipi
+delta_r_gamma_rho
+rho_pt_over_photon_pt
+```
 
 ## Branch Mapping
 
