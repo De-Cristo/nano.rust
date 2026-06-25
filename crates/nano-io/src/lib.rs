@@ -16,6 +16,7 @@ pub use nano_rootio::HttpSourceOptions;
 
 pub mod datacard;
 pub mod genpart_survey;
+pub mod pion_truth_diagnosis;
 pub mod samples;
 pub mod scouting_hrhogamma;
 

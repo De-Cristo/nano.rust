@@ -532,6 +532,97 @@ efficiency-like quantities, response and resolution summaries, and links to the
 truth-proxy plots. These are demonstrator-level checks over accepted
 candidates; they are not final analysis efficiencies.
 
+## Charged-Pion Truth-Proxy Diagnosis
+
+Stage 15B adds a diagnostic for understanding why accepted reconstructed pion
+legs rarely match GenPart charged pions in the Stage 15 truth-proxy output. It
+does not change candidate reconstruction, cuts, truth matching, CSV production,
+or ROOT skim writing.
+
+Run a small diagnostic over the first local files and at most 1000 candidate
+rows:
+
+```bash
+python scripts/diagnose_hrhogamma_pion_truth_proxy.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --candidate-csv /tmp/scouting_hrhogamma_signal_stage15_full_local/combined_candidates.csv \
+  --outdir /tmp/scouting_hrhogamma_pion_truth_diag_small \
+  --max-files 2 \
+  --max-candidates 1000
+```
+
+Run the full local signal diagnostic with matplotlib plots:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage15b .venv/bin/python scripts/diagnose_hrhogamma_pion_truth_proxy.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --candidate-csv /tmp/scouting_hrhogamma_signal_stage15_full_local/combined_candidates.csv \
+  --outdir /tmp/scouting_hrhogamma_pion_truth_diag_full \
+  --all-files
+```
+
+The Python runner builds and calls the Rust per-file diagnostic example:
+
+```bash
+target/debug/examples/scouting_h_rho_gamma_pion_truth_diag \
+  input.root \
+  --candidate-csv selected_candidates.csv \
+  --out-json per_file/file_000001.summary.json \
+  --out-text per_file/file_000001.summary.txt
+```
+
+It reads accepted candidate rows from the supplied CSV, scans matching events
+in the local ROOT files, and summarizes GenPart charged-particle pools for
+those accepted events. The output layout is:
+
+```text
+pion_truth_proxy_diagnosis.md
+pion_truth_proxy_diagnosis.json
+selected_candidates.csv
+per_file/
+file_000001.summary.json
+file_000001.summary.txt
+file_000001.stdout.txt
+plots/
+nearest_pi_plus_dr.png
+nearest_pi_minus_dr.png
+nearest_any_charged_hadron_plus_dr.png
+nearest_any_charged_hadron_minus_dr.png
+match_fraction_by_pool_and_threshold.png
+h_mass_by_pion_match_category.png
+rho_mass_by_pion_match_category.png
+```
+
+The diagnostic tests the following nearest-neighbor pools for each reco pion
+leg:
+
+```text
+pi_only_same_charge
+pi_only_opposite_charge
+any_charged_hadron_same_charge
+any_charged_stable_like_same_charge
+any_charged_particle_same_charge
+```
+
+It reports both-leg match counts for `DeltaR < 0.05`, `0.10`, `0.20`, `0.30`,
+and `0.50`, plus candidate categories including:
+
+```text
+both_reco_pions_match_gen_pions_dr0p1
+only_plus_matches_gen_pion_dr0p1
+only_minus_matches_gen_pion_dr0p1
+no_gen_pion_match_dr0p1
+both_match_any_charged_hadron_dr0p1
+both_match_any_charged_stable_like_dr0p1
+photon_matched_but_no_pion_match
+```
+
+The report also records accepted-event GenPart pool counts for charged pions,
+charged kaons, protons, charged leptons, broad charged-hadron pools, and
+whether PackedGenPart-like branches are present in the requested files. If
+matplotlib is unavailable, the Markdown and JSON summaries are still written
+and plot status explicitly says plots were skipped.
+
 Plots use a compact HEP-style matplotlib configuration when plotting is
 available: 6-inch-scale figures, 10-12 pt fonts, step histograms, axis units,
 tight/constrained layout, optional CMS-style labels through `mplhep`, and both
@@ -638,6 +729,9 @@ the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
   signal sample does not expose useful pion ancestry for this purpose. The
   resulting proxy response plots are validation diagnostics, not a substitute
   for a generator-level decay-chain truth definition.
+- The Stage 15B pion diagnostic still uses GenPart only. If charged-particle
+  matches remain sparse, PackedGenPart or tracking-truth branch families should
+  be surveyed before making pion-level truth-efficiency claims.
 
 ## Next Extension Points
 
@@ -646,4 +740,7 @@ the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
   are validated.
 - Refine the truth-proxy matcher after comparing it with any future sample that
   exposes an explicit `rho0 -> pi+ pi-` generator chain.
+- Choose the next truth-validation stage from the Stage 15B diagnostic result:
+  photon-only validation, charged-hadron proxy matching, PackedGenPart survey,
+  or a reconstruction-quality study.
 - Extend the branch catalogue when true scouting-object files are available.
