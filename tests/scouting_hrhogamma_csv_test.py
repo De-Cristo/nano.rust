@@ -10,6 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "plot_scouting_hrhogamma_csv.py"
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
 TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
+TRUTH_PROXY_FIXTURE = (
+    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
+)
 
 
 class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
@@ -68,6 +71,34 @@ class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
             self.assertIn("truth_matched_count: 1", text)
             self.assertIn("truth_plot_expected: truth_matched_fraction.png", text)
             self.assertIn("truth_plot_expected: reco_h_mass_vs_gen_h_mass.png", text)
+
+    def test_truth_proxy_columns_are_summarized_without_plots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "plots"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(TRUTH_PROXY_FIXTURE),
+                    "--outdir",
+                    str(outdir),
+                    "--no-plots",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "summary.txt").read_text()
+            self.assertIn("truth_proxy_columns: present", text)
+            self.assertIn("truth_proxy_available_count: 3", text)
+            self.assertIn("truth_proxy_matched_dr_0p1_count: 1", text)
+            self.assertIn("truth_proxy_matched_dr_0p2_count: 2", text)
+            self.assertIn("truth_proxy_matched_dr_0p3_count: 2", text)
+            self.assertIn("truth_proxy_plot_expected: truth_proxy_match_thresholds.png", text)
+            self.assertIn("truth_proxy_plot_expected: reco_h_mass_vs_gen_h_proxy_mass.png", text)
 
     def test_hep_style_configuration_helper_is_plain_matplotlib_safe(self):
         script = (REPO_ROOT / "scripts" / "plot_scouting_hrhogamma_csv.py").read_text()

@@ -70,6 +70,49 @@ TRUTH_PLOTS = (
     "reco_photon_pt_vs_gen_photon_pt.png",
     "reco_rho_pt_vs_gen_rho_pt.png",
 )
+TRUTH_PROXY_REQUIRED_COLUMNS = (
+    "truth_strategy",
+    "truth_available",
+    "truth_proxy_matched",
+    "truth_proxy_matched_dr_0p1",
+    "truth_proxy_matched_dr_0p2",
+    "truth_proxy_matched_dr_0p3",
+)
+TRUTH_PROXY_SUMMARY_COLUMNS = (
+    "reco_h_mass_minus_gen_h_proxy_mass",
+    "reco_rho_mass_minus_gen_rho_proxy_mass",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_pi_plus_pt_over_gen_pi_plus_pt",
+    "reco_pi_minus_pt_over_gen_pi_minus_pt",
+    "reco_rho_pt_over_gen_rho_proxy_pt",
+    "reco_h_pt_over_gen_h_proxy_pt",
+    "delta_r_reco_photon_gen_photon",
+    "delta_r_reco_pi_plus_gen_pi_plus",
+    "delta_r_reco_pi_minus_gen_pi_minus",
+    "delta_r_reco_rho_gen_rho_proxy",
+    "delta_r_reco_h_gen_h_proxy",
+)
+TRUTH_PROXY_PLOTS = (
+    "truth_proxy_match_thresholds.png",
+    "h_mass_truth_proxy_matched_vs_unmatched.png",
+    "rho_mass_truth_proxy_matched_vs_unmatched.png",
+    "reco_h_mass_minus_gen_h_proxy_mass.png",
+    "reco_rho_mass_minus_gen_rho_proxy_mass.png",
+    "delta_r_reco_photon_gen_photon.png",
+    "delta_r_reco_pi_plus_gen_pi_plus.png",
+    "delta_r_reco_pi_minus_gen_pi_minus.png",
+    "reco_photon_pt_over_gen_photon_pt.png",
+    "reco_pi_plus_pt_over_gen_pi_plus_pt.png",
+    "reco_pi_minus_pt_over_gen_pi_minus_pt.png",
+    "reco_rho_pt_over_gen_rho_proxy_pt.png",
+    "reco_h_pt_over_gen_h_proxy_pt.png",
+    "reco_h_mass_vs_gen_h_proxy_mass.png",
+    "reco_rho_mass_vs_gen_rho_proxy_mass.png",
+    "reco_photon_pt_vs_gen_photon_pt.png",
+    "reco_pi_plus_pt_vs_gen_pi_plus_pt.png",
+    "reco_pi_minus_pt_vs_gen_pi_minus_pt.png",
+    "reco_h_pt_vs_gen_h_proxy_pt.png",
+)
 DEFAULT_RHO_WINDOW = (0.3, 1.2)
 
 
@@ -253,6 +296,10 @@ def has_truth_columns(fieldnames: list[str]) -> bool:
     return all(column in fieldnames for column in TRUTH_REQUIRED_COLUMNS)
 
 
+def has_truth_proxy_columns(fieldnames: list[str]) -> bool:
+    return all(column in fieldnames for column in TRUTH_PROXY_REQUIRED_COLUMNS)
+
+
 def count_truth(rows: list[dict[str, str]], column: str, value: str) -> int:
     return sum(1 for row in rows if row.get(column, "") == value)
 
@@ -317,6 +364,122 @@ def truth_section(
         lines.extend(f"- [{Path(path).stem}]({path})" for path in produced)
     else:
         lines.append("- No truth PNG plots are present.")
+    lines.append("")
+    return lines
+
+
+def truth_proxy_summary_text(
+    args: argparse.Namespace,
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+    outdir: Path,
+    plots_dir: Path,
+) -> str | None:
+    if not has_truth_proxy_columns(fieldnames):
+        return None
+    total = len(rows)
+    unique_events = {tuple(row[name] for name in ("run", "luminosityBlock", "event")) for row in rows}
+    available = count_truth(rows, "truth_available", "1")
+    photon_anchor = count_truth(rows, "truth_photon_anchor_available", "1")
+    pi_plus = count_truth(rows, "nearest_gen_pi_plus_available", "1")
+    pi_minus = count_truth(rows, "nearest_gen_pi_minus_available", "1")
+    matched_0p1 = count_truth(rows, "truth_proxy_matched_dr_0p1", "1")
+    matched_0p2 = count_truth(rows, "truth_proxy_matched_dr_0p2", "1")
+    matched_0p3 = count_truth(rows, "truth_proxy_matched_dr_0p3", "1")
+    matched_events = {
+        tuple(row[name] for name in ("run", "luminosityBlock", "event"))
+        for row in rows
+        if row.get("truth_proxy_matched_dr_0p1") == "1"
+    }
+    candidate_rate = (
+        f"{args.accepted_candidates / args.processed_events:.6f}"
+        if args.processed_events > 0
+        else "unavailable"
+    )
+    unique_event_fraction = (
+        f"{len(unique_events) / args.processed_events:.6f}"
+        if args.processed_events > 0
+        else "unavailable"
+    )
+    matched_event_fraction = (
+        f"{len(matched_events) / args.processed_events:.6f}"
+        if args.processed_events > 0
+        else "unavailable"
+    )
+    lines = [
+        "# HToRhoGamma Truth-Proxy Summary",
+        "",
+        "These are demonstrator-level efficiency-like and resolution quantities. They are not final analysis efficiencies.",
+        "",
+        "## Candidate-Level Truth-Proxy Summary",
+        "",
+        f"- total accepted candidates: `{total}`",
+        f"- truth available: `{available}` / `{total}` (`{fraction(available, total)}`)",
+        f"- truth photon anchor available: `{photon_anchor}` / `{total}` (`{fraction(photon_anchor, total)}`)",
+        f"- nearest pi+ available: `{pi_plus}` / `{total}` (`{fraction(pi_plus, total)}`)",
+        f"- nearest pi- available: `{pi_minus}` / `{total}` (`{fraction(pi_minus, total)}`)",
+        f"- truth-proxy matched dR<0.1: `{matched_0p1}` / `{total}` (`{fraction(matched_0p1, total)}`)",
+        f"- truth-proxy matched dR<0.2: `{matched_0p2}` / `{total}` (`{fraction(matched_0p2, total)}`)",
+        f"- truth-proxy matched dR<0.3: `{matched_0p3}` / `{total}` (`{fraction(matched_0p3, total)}`)",
+        "",
+        "## Event-Level Efficiency-Like Summary",
+        "",
+        f"- processed events: `{args.processed_events}`",
+        f"- accepted candidates: `{args.accepted_candidates}`",
+        f"- accepted candidates / processed events: `{candidate_rate}`",
+        f"- unique events with >=1 accepted candidate: `{len(unique_events)}`",
+        f"- unique accepted-event fraction: `{unique_event_fraction}`",
+        f"- accepted events with truth-proxy matched candidate: `{len(matched_events)}`",
+        f"- truth-proxy matched accepted-event fraction: `{matched_event_fraction}`",
+        "",
+        "## Resolution And Response Summaries",
+        "",
+        "| variable | count | min | mean | median | p16 | p50 | p84 | max |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for column in TRUTH_PROXY_SUMMARY_COLUMNS:
+        if column not in fieldnames:
+            continue
+        summary = summarize(optional_numeric_values(rows, column))
+        if summary is None:
+            lines.append(f"| {column} | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+        else:
+            lines.append(
+                f"| {column} | {summary['count']} | {summary['min']:.6f} | "
+                f"{summary['mean']:.6f} | {summary['median']:.6f} | "
+                f"{summary['p16']:.6f} | {summary['p50']:.6f} | "
+                f"{summary['p84']:.6f} | {summary['max']:.6f} |"
+            )
+    lines.extend(["", "## Truth-Proxy Plot Index", ""])
+    produced = [
+        relative_link(outdir, plots_dir / name)
+        for name in TRUTH_PROXY_PLOTS
+        if (plots_dir / name).exists()
+    ]
+    if produced:
+        lines.extend(f"- [{Path(path).stem}]({path})" for path in produced)
+    else:
+        lines.append("- No truth-proxy PNG plots are present.")
+    lines.extend(
+        [
+            "",
+            "## Strategy Notes",
+            "",
+            "- Photon truth uses the nearest Higgs-descendant GenPart photon.",
+            "- Charged pion truth proxies use nearest final-state GenPart charged pions without requiring Higgs or rho ancestry.",
+            "- The primary match flag is dR<0.1 for photon, pi+, and pi-; dR<0.2 and dR<0.3 are diagnostic.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def truth_proxy_section(fieldnames: list[str]) -> list[str]:
+    lines = ["## Truth-Proxy Efficiency And Resolution", ""]
+    if has_truth_proxy_columns(fieldnames):
+        lines.append("See [truth_proxy_summary.md](truth_proxy_summary.md) for truth-proxy matched fractions, response summaries, and plot links.")
+    else:
+        lines.append("Truth-proxy columns are absent.")
     lines.append("")
     return lines
 
@@ -411,6 +574,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
         f"- rho mass window source: `{rho_window_source}`",
         "",
         *truth_section(rows, fieldnames, outdir, plots_dir),
+        *truth_proxy_section(fieldnames),
         "## Plot Index",
         "",
     ]
@@ -458,6 +622,10 @@ def main() -> int:
         report = build_report(args, rows, fieldnames)
         output = args.outdir / "physics_summary.md"
         output.write_text(report)
+        plots_dir = args.plots_dir if args.plots_dir is not None else args.outdir / "plots"
+        truth_proxy = truth_proxy_summary_text(args, rows, fieldnames, args.outdir, plots_dir)
+        if truth_proxy is not None:
+            (args.outdir / "truth_proxy_summary.md").write_text(truth_proxy)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

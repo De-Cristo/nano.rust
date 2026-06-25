@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
 use nano_io::scouting_hrhogamma::{
-    identify_truth_chain, load_branch_mapping, match_reco_to_truth, reconstruct_event, EventInputs,
-    GenParticle, HCand, HToRhoGammaBranchMapping, HToRhoGammaCuts, HToRhoGammaTruth,
-    TruthMatchResult, TruthTopology,
+    load_branch_mapping, match_reco_to_truth_proxy, reconstruct_event, EventInputs, GenParticle,
+    HCand, HToRhoGammaBranchMapping, HToRhoGammaCuts, TruthMatchResult, TruthTopology,
 };
 use nano_io::writer::{write_events, OutputBranch};
 
@@ -396,11 +395,11 @@ fn analyze(
             continue;
         };
         let truth = if truth_enabled {
-            let truth = read_truth(&event)?;
-            if truth.is_some() {
+            let particles = read_gen_particles(&event)?;
+            if particles.is_some() {
                 report.truth_available_events += 1;
             }
-            Some(match_reco_to_truth(&h, truth.as_ref()))
+            Some(match_reco_to_truth_proxy(&h, particles.as_deref()))
         } else {
             None
         };
@@ -429,6 +428,15 @@ fn analyze(
             }
             if truth.truth_matched {
                 report.truth_matched += 1;
+            }
+            if truth.truth_proxy_matched_dr_0p1 {
+                report.truth_proxy_matched_0p1 += 1;
+            }
+            if truth.truth_proxy_matched_dr_0p2 {
+                report.truth_proxy_matched_0p2 += 1;
+            }
+            if truth.truth_proxy_matched_dr_0p3 {
+                report.truth_proxy_matched_0p3 += 1;
             }
         }
 
@@ -462,11 +470,15 @@ fn validate_len(name: &str, actual: usize, expected: usize) -> Result<(), Box<dy
     }
 }
 
-fn read_truth(event: &nano_core::Event) -> Result<Option<HToRhoGammaTruth>, Box<dyn Error>> {
-    const REQUIRED: [&str; 7] = [
+fn read_gen_particles(
+    event: &nano_core::Event,
+) -> Result<Option<Vec<GenParticle>>, Box<dyn Error>> {
+    const REQUIRED: [&str; 9] = [
         "nGenPart",
         "GenPart_pdgId",
         "GenPart_genPartIdxMother",
+        "GenPart_status",
+        "GenPart_statusFlags",
         "GenPart_pt",
         "GenPart_eta",
         "GenPart_phi",
@@ -481,12 +493,16 @@ fn read_truth(event: &nano_core::Event) -> Result<Option<HToRhoGammaTruth>, Box<
     let n_gen = nonnegative_count(event.scalar::<i32>("nGenPart")?, "nGenPart")?;
     let pdg_id = event.vector_ref::<i32>("GenPart_pdgId")?;
     let mother = event.vector_ref::<i16>("GenPart_genPartIdxMother")?;
+    let status = event.vector_ref::<i32>("GenPart_status")?;
+    let status_flags = event.vector_ref::<u16>("GenPart_statusFlags")?;
     let pt = event.vector_ref::<f32>("GenPart_pt")?;
     let eta = event.vector_ref::<f32>("GenPart_eta")?;
     let phi = event.vector_ref::<f32>("GenPart_phi")?;
     let mass = event.vector_ref::<f32>("GenPart_mass")?;
     validate_len("GenPart_pdgId", pdg_id.len(), n_gen)?;
     validate_len("GenPart_genPartIdxMother", mother.len(), n_gen)?;
+    validate_len("GenPart_status", status.len(), n_gen)?;
+    validate_len("GenPart_statusFlags", status_flags.len(), n_gen)?;
     validate_len("GenPart_pt", pt.len(), n_gen)?;
     validate_len("GenPart_eta", eta.len(), n_gen)?;
     validate_len("GenPart_phi", phi.len(), n_gen)?;
@@ -495,17 +511,19 @@ fn read_truth(event: &nano_core::Event) -> Result<Option<HToRhoGammaTruth>, Box<
     let particles = (0..n_gen)
         .map(|index| {
             let mother_index = usize::try_from(mother[index]).ok();
-            GenParticle::new(
+            GenParticle::with_status(
                 pdg_id[index],
                 mother_index,
                 f64::from(pt[index]),
                 f64::from(eta[index]),
                 f64::from(phi[index]),
                 f64::from(mass[index]),
+                status[index],
+                status_flags[index],
             )
         })
         .collect::<Vec<_>>();
-    Ok(Some(identify_truth_chain(&particles)))
+    Ok(Some(particles))
 }
 
 fn print_report(report: &Report) {
@@ -528,6 +546,12 @@ fn print_report(report: &Report) {
         report.truth_fallback,
         report.truth_not_found,
         report.truth_not_available
+    );
+    println!(
+        "truth_proxy_summary: matched_dr_0p1={} matched_dr_0p2={} matched_dr_0p3={}",
+        report.truth_proxy_matched_0p1,
+        report.truth_proxy_matched_0p2,
+        report.truth_proxy_matched_0p3
     );
     println!("cutflow:");
     println!("  all_events {}", report.cutflow.all_events);
@@ -602,6 +626,9 @@ struct Report {
     truth_fallback: usize,
     truth_not_found: usize,
     truth_not_available: usize,
+    truth_proxy_matched_0p1: usize,
+    truth_proxy_matched_0p2: usize,
+    truth_proxy_matched_0p3: usize,
     candidates: Vec<CandidateSummary>,
 }
 
@@ -681,38 +708,51 @@ impl CandidateCsvWriter {
             let truth = candidate
                 .truth
                 .unwrap_or_else(TruthMatchResult::not_available);
-            write!(
-                self.writer,
-                ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                truth.truth_available as u8,
-                truth.truth_topology.as_str(),
-                truth.truth_matched as u8,
-                opt(truth.gen_h.map(|p| p.pt)),
-                opt(truth.gen_h.map(|p| p.eta)),
-                opt(truth.gen_h.map(|p| p.phi)),
-                opt(truth.gen_h.map(|p| p.mass)),
-                opt(truth.gen_rho.map(|p| p.pt)),
-                opt(truth.gen_rho.map(|p| p.eta)),
-                opt(truth.gen_rho.map(|p| p.phi)),
-                opt(truth.gen_rho.map(|p| p.mass)),
+            let fields = vec![
+                truth.truth_strategy.as_str().to_string(),
+                (truth.truth_available as u8).to_string(),
+                (truth.truth_proxy_matched as u8).to_string(),
+                (truth.truth_proxy_matched_dr_0p1 as u8).to_string(),
+                (truth.truth_proxy_matched_dr_0p2 as u8).to_string(),
+                (truth.truth_proxy_matched_dr_0p3 as u8).to_string(),
+                (truth.truth_photon_anchor_available as u8).to_string(),
+                (truth.gen_photon_from_higgs as u8).to_string(),
                 opt(truth.gen_photon.map(|p| p.pt)),
                 opt(truth.gen_photon.map(|p| p.eta)),
                 opt(truth.gen_photon.map(|p| p.phi)),
+                opt(truth.gen_photon.map(|p| p.mass)),
+                (truth.nearest_gen_pi_plus_available as u8).to_string(),
                 opt(truth.gen_pi_plus.map(|p| p.pt)),
                 opt(truth.gen_pi_plus.map(|p| p.eta)),
                 opt(truth.gen_pi_plus.map(|p| p.phi)),
+                opt(truth.gen_pi_plus.map(|p| p.mass)),
+                (truth.nearest_gen_pi_minus_available as u8).to_string(),
                 opt(truth.gen_pi_minus.map(|p| p.pt)),
                 opt(truth.gen_pi_minus.map(|p| p.eta)),
                 opt(truth.gen_pi_minus.map(|p| p.phi)),
+                opt(truth.gen_pi_minus.map(|p| p.mass)),
+                opt(truth.gen_rho_proxy.map(|p| p.pt)),
+                opt(truth.gen_rho_proxy.map(|p| p.eta)),
+                opt(truth.gen_rho_proxy.map(|p| p.phi)),
+                opt(truth.gen_rho_proxy.map(|p| p.mass)),
+                opt(truth.gen_h_proxy.map(|p| p.pt)),
+                opt(truth.gen_h_proxy.map(|p| p.eta)),
+                opt(truth.gen_h_proxy.map(|p| p.phi)),
+                opt(truth.gen_h_proxy.map(|p| p.mass)),
                 opt(truth.delta_r_reco_photon_gen_photon),
                 opt(truth.delta_r_reco_pi_plus_gen_pi_plus),
                 opt(truth.delta_r_reco_pi_minus_gen_pi_minus),
-                opt(truth.delta_r_reco_rho_gen_rho),
-                opt(truth.reco_h_mass_minus_gen_h_mass),
-                opt(truth.reco_rho_mass_minus_gen_rho_mass),
+                opt(truth.delta_r_reco_rho_gen_rho_proxy),
+                opt(truth.delta_r_reco_h_gen_h_proxy),
+                opt(truth.reco_h_mass_minus_gen_h_proxy_mass),
+                opt(truth.reco_rho_mass_minus_gen_rho_proxy_mass),
                 opt(truth.reco_photon_pt_over_gen_photon_pt),
-                opt(truth.reco_rho_pt_over_gen_rho_pt),
-            )?;
+                opt(truth.reco_pi_plus_pt_over_gen_pi_plus_pt),
+                opt(truth.reco_pi_minus_pt_over_gen_pi_minus_pt),
+                opt(truth.reco_rho_pt_over_gen_rho_proxy_pt),
+                opt(truth.reco_h_pt_over_gen_h_proxy_pt),
+            ];
+            write!(self.writer, ",{}", fields.join(","))?;
         }
         writeln!(self.writer)?;
         Ok(())
@@ -727,7 +767,7 @@ impl CandidateCsvWriter {
 fn candidate_csv_header(truth: bool) -> String {
     let base = "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt";
     if truth {
-        format!("{base},truth_available,truth_topology,truth_matched,gen_h_pt,gen_h_eta,gen_h_phi,gen_h_mass,gen_rho_pt,gen_rho_eta,gen_rho_phi,gen_rho_mass,gen_photon_pt,gen_photon_eta,gen_photon_phi,gen_pi_plus_pt,gen_pi_plus_eta,gen_pi_plus_phi,gen_pi_minus_pt,gen_pi_minus_eta,gen_pi_minus_phi,delta_r_reco_photon_gen_photon,delta_r_reco_pi_plus_gen_pi_plus,delta_r_reco_pi_minus_gen_pi_minus,delta_r_reco_rho_gen_rho,reco_h_mass_minus_gen_h_mass,reco_rho_mass_minus_gen_rho_mass,reco_photon_pt_over_gen_photon_pt,reco_rho_pt_over_gen_rho_pt")
+        format!("{base},truth_strategy,truth_available,truth_proxy_matched,truth_proxy_matched_dr_0p1,truth_proxy_matched_dr_0p2,truth_proxy_matched_dr_0p3,truth_photon_anchor_available,gen_photon_from_higgs,gen_photon_pt,gen_photon_eta,gen_photon_phi,gen_photon_mass,nearest_gen_pi_plus_available,gen_pi_plus_pt,gen_pi_plus_eta,gen_pi_plus_phi,gen_pi_plus_mass,nearest_gen_pi_minus_available,gen_pi_minus_pt,gen_pi_minus_eta,gen_pi_minus_phi,gen_pi_minus_mass,gen_rho_proxy_pt,gen_rho_proxy_eta,gen_rho_proxy_phi,gen_rho_proxy_mass,gen_h_proxy_pt,gen_h_proxy_eta,gen_h_proxy_phi,gen_h_proxy_mass,delta_r_reco_photon_gen_photon,delta_r_reco_pi_plus_gen_pi_plus,delta_r_reco_pi_minus_gen_pi_minus,delta_r_reco_rho_gen_rho_proxy,delta_r_reco_h_gen_h_proxy,reco_h_mass_minus_gen_h_proxy_mass,reco_rho_mass_minus_gen_rho_proxy_mass,reco_photon_pt_over_gen_photon_pt,reco_pi_plus_pt_over_gen_pi_plus_pt,reco_pi_minus_pt_over_gen_pi_minus_pt,reco_rho_pt_over_gen_rho_proxy_pt,reco_h_pt_over_gen_h_proxy_pt")
     } else {
         base.to_string()
     }
@@ -764,6 +804,15 @@ struct CandidateRootWriter {
     delta_r_gamma_rho: Vec<f32>,
     rho_pt_over_photon_pt: Vec<f32>,
     truth_available: Vec<bool>,
+    truth_proxy_matched: Vec<bool>,
+    truth_proxy_matched_dr_0p1: Vec<bool>,
+    truth_proxy_matched_dr_0p2: Vec<bool>,
+    truth_proxy_matched_dr_0p3: Vec<bool>,
+    truth_strategy_code: Vec<i32>,
+    truth_photon_anchor_available: Vec<bool>,
+    gen_photon_from_higgs: Vec<bool>,
+    nearest_gen_pi_plus_available: Vec<bool>,
+    nearest_gen_pi_minus_available: Vec<bool>,
     truth_matched: Vec<bool>,
     truth_topology_code: Vec<i32>,
     gen_h_pt: Vec<f32>,
@@ -777,20 +826,39 @@ struct CandidateRootWriter {
     gen_photon_pt: Vec<f32>,
     gen_photon_eta: Vec<f32>,
     gen_photon_phi: Vec<f32>,
+    gen_photon_mass: Vec<f32>,
     gen_pi_plus_pt: Vec<f32>,
     gen_pi_plus_eta: Vec<f32>,
     gen_pi_plus_phi: Vec<f32>,
+    gen_pi_plus_mass: Vec<f32>,
     gen_pi_minus_pt: Vec<f32>,
     gen_pi_minus_eta: Vec<f32>,
     gen_pi_minus_phi: Vec<f32>,
+    gen_pi_minus_mass: Vec<f32>,
+    gen_rho_proxy_pt: Vec<f32>,
+    gen_rho_proxy_eta: Vec<f32>,
+    gen_rho_proxy_phi: Vec<f32>,
+    gen_rho_proxy_mass: Vec<f32>,
+    gen_h_proxy_pt: Vec<f32>,
+    gen_h_proxy_eta: Vec<f32>,
+    gen_h_proxy_phi: Vec<f32>,
+    gen_h_proxy_mass: Vec<f32>,
     delta_r_reco_photon_gen_photon: Vec<f32>,
     delta_r_reco_pi_plus_gen_pi_plus: Vec<f32>,
     delta_r_reco_pi_minus_gen_pi_minus: Vec<f32>,
     delta_r_reco_rho_gen_rho: Vec<f32>,
+    delta_r_reco_rho_gen_rho_proxy: Vec<f32>,
+    delta_r_reco_h_gen_h_proxy: Vec<f32>,
     reco_h_mass_minus_gen_h_mass: Vec<f32>,
     reco_rho_mass_minus_gen_rho_mass: Vec<f32>,
+    reco_h_mass_minus_gen_h_proxy_mass: Vec<f32>,
+    reco_rho_mass_minus_gen_rho_proxy_mass: Vec<f32>,
     reco_photon_pt_over_gen_photon_pt: Vec<f32>,
     reco_rho_pt_over_gen_rho_pt: Vec<f32>,
+    reco_pi_plus_pt_over_gen_pi_plus_pt: Vec<f32>,
+    reco_pi_minus_pt_over_gen_pi_minus_pt: Vec<f32>,
+    reco_rho_pt_over_gen_rho_proxy_pt: Vec<f32>,
+    reco_h_pt_over_gen_h_proxy_pt: Vec<f32>,
 }
 
 impl CandidateRootWriter {
@@ -833,6 +901,21 @@ impl CandidateRootWriter {
                 .truth
                 .unwrap_or_else(TruthMatchResult::not_available);
             self.truth_available.push(truth.truth_available);
+            self.truth_proxy_matched.push(truth.truth_proxy_matched);
+            self.truth_proxy_matched_dr_0p1
+                .push(truth.truth_proxy_matched_dr_0p1);
+            self.truth_proxy_matched_dr_0p2
+                .push(truth.truth_proxy_matched_dr_0p2);
+            self.truth_proxy_matched_dr_0p3
+                .push(truth.truth_proxy_matched_dr_0p3);
+            self.truth_strategy_code.push(truth.truth_strategy.code());
+            self.truth_photon_anchor_available
+                .push(truth.truth_photon_anchor_available);
+            self.gen_photon_from_higgs.push(truth.gen_photon_from_higgs);
+            self.nearest_gen_pi_plus_available
+                .push(truth.nearest_gen_pi_plus_available);
+            self.nearest_gen_pi_minus_available
+                .push(truth.nearest_gen_pi_minus_available);
             self.truth_matched.push(truth.truth_matched);
             self.truth_topology_code.push(truth.truth_topology.code());
             push_particle(
@@ -849,23 +932,40 @@ impl CandidateRootWriter {
                 &mut self.gen_rho_mass,
                 truth.gen_rho,
             );
-            push_particle_no_mass(
+            push_particle(
                 &mut self.gen_photon_pt,
                 &mut self.gen_photon_eta,
                 &mut self.gen_photon_phi,
+                &mut self.gen_photon_mass,
                 truth.gen_photon,
             );
-            push_particle_no_mass(
+            push_particle(
                 &mut self.gen_pi_plus_pt,
                 &mut self.gen_pi_plus_eta,
                 &mut self.gen_pi_plus_phi,
+                &mut self.gen_pi_plus_mass,
                 truth.gen_pi_plus,
             );
-            push_particle_no_mass(
+            push_particle(
                 &mut self.gen_pi_minus_pt,
                 &mut self.gen_pi_minus_eta,
                 &mut self.gen_pi_minus_phi,
+                &mut self.gen_pi_minus_mass,
                 truth.gen_pi_minus,
+            );
+            push_particle(
+                &mut self.gen_rho_proxy_pt,
+                &mut self.gen_rho_proxy_eta,
+                &mut self.gen_rho_proxy_phi,
+                &mut self.gen_rho_proxy_mass,
+                truth.gen_rho_proxy,
+            );
+            push_particle(
+                &mut self.gen_h_proxy_pt,
+                &mut self.gen_h_proxy_eta,
+                &mut self.gen_h_proxy_phi,
+                &mut self.gen_h_proxy_mass,
+                truth.gen_h_proxy,
             );
             self.delta_r_reco_photon_gen_photon
                 .push(opt_f32(truth.delta_r_reco_photon_gen_photon));
@@ -875,14 +975,30 @@ impl CandidateRootWriter {
                 .push(opt_f32(truth.delta_r_reco_pi_minus_gen_pi_minus));
             self.delta_r_reco_rho_gen_rho
                 .push(opt_f32(truth.delta_r_reco_rho_gen_rho));
+            self.delta_r_reco_rho_gen_rho_proxy
+                .push(opt_f32(truth.delta_r_reco_rho_gen_rho_proxy));
+            self.delta_r_reco_h_gen_h_proxy
+                .push(opt_f32(truth.delta_r_reco_h_gen_h_proxy));
             self.reco_h_mass_minus_gen_h_mass
                 .push(opt_f32(truth.reco_h_mass_minus_gen_h_mass));
             self.reco_rho_mass_minus_gen_rho_mass
                 .push(opt_f32(truth.reco_rho_mass_minus_gen_rho_mass));
+            self.reco_h_mass_minus_gen_h_proxy_mass
+                .push(opt_f32(truth.reco_h_mass_minus_gen_h_proxy_mass));
+            self.reco_rho_mass_minus_gen_rho_proxy_mass
+                .push(opt_f32(truth.reco_rho_mass_minus_gen_rho_proxy_mass));
             self.reco_photon_pt_over_gen_photon_pt
                 .push(opt_f32(truth.reco_photon_pt_over_gen_photon_pt));
             self.reco_rho_pt_over_gen_rho_pt
                 .push(opt_f32(truth.reco_rho_pt_over_gen_rho_pt));
+            self.reco_pi_plus_pt_over_gen_pi_plus_pt
+                .push(opt_f32(truth.reco_pi_plus_pt_over_gen_pi_plus_pt));
+            self.reco_pi_minus_pt_over_gen_pi_minus_pt
+                .push(opt_f32(truth.reco_pi_minus_pt_over_gen_pi_minus_pt));
+            self.reco_rho_pt_over_gen_rho_proxy_pt
+                .push(opt_f32(truth.reco_rho_pt_over_gen_rho_proxy_pt));
+            self.reco_h_pt_over_gen_h_proxy_pt
+                .push(opt_f32(truth.reco_h_pt_over_gen_h_proxy_pt));
         }
     }
 
@@ -924,6 +1040,42 @@ impl CandidateRootWriter {
         if self.truth_enabled {
             branches.extend([
                 OutputBranch::bool("truth_available", std::mem::take(&mut self.truth_available)),
+                OutputBranch::bool(
+                    "truth_proxy_matched",
+                    std::mem::take(&mut self.truth_proxy_matched),
+                ),
+                OutputBranch::bool(
+                    "truth_proxy_matched_dr_0p1",
+                    std::mem::take(&mut self.truth_proxy_matched_dr_0p1),
+                ),
+                OutputBranch::bool(
+                    "truth_proxy_matched_dr_0p2",
+                    std::mem::take(&mut self.truth_proxy_matched_dr_0p2),
+                ),
+                OutputBranch::bool(
+                    "truth_proxy_matched_dr_0p3",
+                    std::mem::take(&mut self.truth_proxy_matched_dr_0p3),
+                ),
+                OutputBranch::i32(
+                    "truth_strategy_code",
+                    std::mem::take(&mut self.truth_strategy_code),
+                ),
+                OutputBranch::bool(
+                    "truth_photon_anchor_available",
+                    std::mem::take(&mut self.truth_photon_anchor_available),
+                ),
+                OutputBranch::bool(
+                    "gen_photon_from_higgs",
+                    std::mem::take(&mut self.gen_photon_from_higgs),
+                ),
+                OutputBranch::bool(
+                    "nearest_gen_pi_plus_available",
+                    std::mem::take(&mut self.nearest_gen_pi_plus_available),
+                ),
+                OutputBranch::bool(
+                    "nearest_gen_pi_minus_available",
+                    std::mem::take(&mut self.nearest_gen_pi_minus_available),
+                ),
                 OutputBranch::bool("truth_matched", std::mem::take(&mut self.truth_matched)),
                 OutputBranch::i32(
                     "truth_topology_code",
@@ -940,9 +1092,14 @@ impl CandidateRootWriter {
                 OutputBranch::f32("gen_photon_pt", std::mem::take(&mut self.gen_photon_pt)),
                 OutputBranch::f32("gen_photon_eta", std::mem::take(&mut self.gen_photon_eta)),
                 OutputBranch::f32("gen_photon_phi", std::mem::take(&mut self.gen_photon_phi)),
+                OutputBranch::f32("gen_photon_mass", std::mem::take(&mut self.gen_photon_mass)),
                 OutputBranch::f32("gen_pi_plus_pt", std::mem::take(&mut self.gen_pi_plus_pt)),
                 OutputBranch::f32("gen_pi_plus_eta", std::mem::take(&mut self.gen_pi_plus_eta)),
                 OutputBranch::f32("gen_pi_plus_phi", std::mem::take(&mut self.gen_pi_plus_phi)),
+                OutputBranch::f32(
+                    "gen_pi_plus_mass",
+                    std::mem::take(&mut self.gen_pi_plus_mass),
+                ),
                 OutputBranch::f32("gen_pi_minus_pt", std::mem::take(&mut self.gen_pi_minus_pt)),
                 OutputBranch::f32(
                     "gen_pi_minus_eta",
@@ -951,6 +1108,33 @@ impl CandidateRootWriter {
                 OutputBranch::f32(
                     "gen_pi_minus_phi",
                     std::mem::take(&mut self.gen_pi_minus_phi),
+                ),
+                OutputBranch::f32(
+                    "gen_pi_minus_mass",
+                    std::mem::take(&mut self.gen_pi_minus_mass),
+                ),
+                OutputBranch::f32(
+                    "gen_rho_proxy_pt",
+                    std::mem::take(&mut self.gen_rho_proxy_pt),
+                ),
+                OutputBranch::f32(
+                    "gen_rho_proxy_eta",
+                    std::mem::take(&mut self.gen_rho_proxy_eta),
+                ),
+                OutputBranch::f32(
+                    "gen_rho_proxy_phi",
+                    std::mem::take(&mut self.gen_rho_proxy_phi),
+                ),
+                OutputBranch::f32(
+                    "gen_rho_proxy_mass",
+                    std::mem::take(&mut self.gen_rho_proxy_mass),
+                ),
+                OutputBranch::f32("gen_h_proxy_pt", std::mem::take(&mut self.gen_h_proxy_pt)),
+                OutputBranch::f32("gen_h_proxy_eta", std::mem::take(&mut self.gen_h_proxy_eta)),
+                OutputBranch::f32("gen_h_proxy_phi", std::mem::take(&mut self.gen_h_proxy_phi)),
+                OutputBranch::f32(
+                    "gen_h_proxy_mass",
+                    std::mem::take(&mut self.gen_h_proxy_mass),
                 ),
                 OutputBranch::f32(
                     "delta_r_reco_photon_gen_photon",
@@ -969,6 +1153,14 @@ impl CandidateRootWriter {
                     std::mem::take(&mut self.delta_r_reco_rho_gen_rho),
                 ),
                 OutputBranch::f32(
+                    "delta_r_reco_rho_gen_rho_proxy",
+                    std::mem::take(&mut self.delta_r_reco_rho_gen_rho_proxy),
+                ),
+                OutputBranch::f32(
+                    "delta_r_reco_h_gen_h_proxy",
+                    std::mem::take(&mut self.delta_r_reco_h_gen_h_proxy),
+                ),
+                OutputBranch::f32(
                     "reco_h_mass_minus_gen_h_mass",
                     std::mem::take(&mut self.reco_h_mass_minus_gen_h_mass),
                 ),
@@ -977,12 +1169,36 @@ impl CandidateRootWriter {
                     std::mem::take(&mut self.reco_rho_mass_minus_gen_rho_mass),
                 ),
                 OutputBranch::f32(
+                    "reco_h_mass_minus_gen_h_proxy_mass",
+                    std::mem::take(&mut self.reco_h_mass_minus_gen_h_proxy_mass),
+                ),
+                OutputBranch::f32(
+                    "reco_rho_mass_minus_gen_rho_proxy_mass",
+                    std::mem::take(&mut self.reco_rho_mass_minus_gen_rho_proxy_mass),
+                ),
+                OutputBranch::f32(
                     "reco_photon_pt_over_gen_photon_pt",
                     std::mem::take(&mut self.reco_photon_pt_over_gen_photon_pt),
                 ),
                 OutputBranch::f32(
                     "reco_rho_pt_over_gen_rho_pt",
                     std::mem::take(&mut self.reco_rho_pt_over_gen_rho_pt),
+                ),
+                OutputBranch::f32(
+                    "reco_pi_plus_pt_over_gen_pi_plus_pt",
+                    std::mem::take(&mut self.reco_pi_plus_pt_over_gen_pi_plus_pt),
+                ),
+                OutputBranch::f32(
+                    "reco_pi_minus_pt_over_gen_pi_minus_pt",
+                    std::mem::take(&mut self.reco_pi_minus_pt_over_gen_pi_minus_pt),
+                ),
+                OutputBranch::f32(
+                    "reco_rho_pt_over_gen_rho_proxy_pt",
+                    std::mem::take(&mut self.reco_rho_pt_over_gen_rho_proxy_pt),
+                ),
+                OutputBranch::f32(
+                    "reco_h_pt_over_gen_h_proxy_pt",
+                    std::mem::take(&mut self.reco_h_pt_over_gen_h_proxy_pt),
                 ),
             ]);
         }
@@ -1006,15 +1222,4 @@ fn push_particle(
     eta.push(opt_f32(particle.map(|particle| particle.eta)));
     phi.push(opt_f32(particle.map(|particle| particle.phi)));
     mass.push(opt_f32(particle.map(|particle| particle.mass)));
-}
-
-fn push_particle_no_mass(
-    pt: &mut Vec<f32>,
-    eta: &mut Vec<f32>,
-    phi: &mut Vec<f32>,
-    particle: Option<GenParticle>,
-) {
-    pt.push(opt_f32(particle.map(|particle| particle.pt)));
-    eta.push(opt_f32(particle.map(|particle| particle.eta)));
-    phi.push(opt_f32(particle.map(|particle| particle.phi)));
 }

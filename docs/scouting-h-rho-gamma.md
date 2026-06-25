@@ -335,13 +335,13 @@ python scripts/run_scouting_hrhogamma_signal.py \
 ```
 
 Run every ROOT file in a local signal directory with optional GenPart truth
-validation:
+truth-proxy validation:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage15 .venv/bin/python scripts/run_scouting_hrhogamma_signal.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
   --config configs/scouting/h_rho_gamma.toml \
-  --outdir /tmp/scouting_hrhogamma_signal_stage14_full_local \
+  --outdir /tmp/scouting_hrhogamma_signal_stage15_full_local \
   --all-files \
   --truth
 ```
@@ -456,12 +456,22 @@ h_mass_vs_rho_mass.png
 photon_pt_vs_h_mass.png
 rho_pt_vs_h_mass.png
 delta_r_gamma_rho_vs_h_mass.png
-truth_matched_fraction.png
-h_mass_truth_matched_vs_unmatched.png
-reco_h_mass_minus_gen_h_mass.png
-reco_h_mass_minus_gen_h_mass.pdf
-reco_h_mass_vs_gen_h_mass.png
-reco_h_mass_vs_gen_h_mass.pdf
+truth_proxy_match_thresholds.png
+truth_proxy_match_thresholds.pdf
+h_mass_truth_proxy_matched_vs_unmatched.png
+h_mass_truth_proxy_matched_vs_unmatched.pdf
+rho_mass_truth_proxy_matched_vs_unmatched.png
+rho_mass_truth_proxy_matched_vs_unmatched.pdf
+reco_h_mass_minus_gen_h_proxy_mass.png
+reco_h_mass_minus_gen_h_proxy_mass.pdf
+reco_rho_mass_minus_gen_rho_proxy_mass.png
+reco_rho_mass_minus_gen_rho_proxy_mass.pdf
+delta_r_reco_photon_gen_photon.png
+delta_r_reco_photon_gen_photon.pdf
+reco_photon_pt_over_gen_photon_pt.png
+reco_photon_pt_over_gen_photon_pt.pdf
+reco_h_mass_vs_gen_h_proxy_mass.png
+reco_h_mass_vs_gen_h_proxy_mass.pdf
 ```
 
 `production_summary.txt` records the dataset, manifest path, DAS resolver mode,
@@ -487,18 +497,40 @@ skipped.
 When `--truth` is enabled, the Rust example attempts to read standard NanoAOD
 GenPart branches: `nGenPart`, `GenPart_pdgId`,
 `GenPart_genPartIdxMother`, `GenPart_status`, `GenPart_statusFlags`,
-`GenPart_pt`, `GenPart_eta`, `GenPart_phi`, and `GenPart_mass`. The truth
-topology search first looks for `H(25) -> rho0(113) + gamma(22)` with
-`rho0 -> pi+ pi-`, then falls back to Higgs-descendant `gamma`, `pi+`, and
-`pi-` without an explicit rho. Candidate matching uses
-`DeltaR(reco gamma, gen gamma) < 0.1`,
-`DeltaR(reco pi+, gen pi+) < 0.1`, and
-`DeltaR(reco pi-, gen pi-) < 0.1`. Truth mode appends GenPart kinematics,
-matching DeltaR values, reco-gen response variables, `truth_available`,
-`truth_topology`, and `truth_matched` to the CSV. The combined ROOT skim stores
-the same numeric quantities and encodes topology as `truth_topology_code`:
-`0=not_available`, `1=explicit_rho`, `2=fallback_no_explicit_rho`,
-`3=not_found`.
+`GenPart_pt`, `GenPart_eta`, `GenPart_phi`, and `GenPart_mass`. Stage 15 uses a
+topology-aware truth-proxy strategy by default. This reflects the Stage 14B
+survey result: the local signal sample has a reliable Higgs-descendant photon
+anchor, but the GenPart record does not provide a useful
+`rho0 -> pi+ pi-` ancestry chain for the charged pions.
+
+The truth-proxy matcher:
+
+1. Selects the closest GenPart photon with `pdgId == 22` and Higgs ancestry.
+2. Selects the nearest plausible final-state GenPart `pi+` and `pi-` by
+   `DeltaR`, without requiring Higgs or rho ancestry for the pions.
+3. Builds a generator rho proxy from the matched pions and a generator H proxy
+   from the matched photon plus pions.
+4. Defines the primary `truth_proxy_matched` flag as all three object matches
+   satisfying `DeltaR < 0.1`.
+5. Also records looser diagnostic flags for `DeltaR < 0.2` and `DeltaR < 0.3`.
+
+Truth mode appends explicit proxy-named CSV columns including
+`truth_strategy`, `truth_available`, `truth_proxy_matched`,
+`truth_proxy_matched_dr_0p1`, `truth_proxy_matched_dr_0p2`,
+`truth_proxy_matched_dr_0p3`, `truth_photon_anchor_available`,
+`nearest_gen_pi_plus_available`, `nearest_gen_pi_minus_available`,
+GenPart photon and pion kinematics, `gen_rho_proxy_*`, `gen_h_proxy_*`,
+reco-gen `DeltaR` values, and response variables such as
+`reco_h_mass_minus_gen_h_proxy_mass` and
+`reco_h_pt_over_gen_h_proxy_pt`. The combined ROOT skim stores the same
+candidate-level quantities and encodes `truth_strategy` as
+`truth_strategy_code`: `0=none`, `1=explicit_chain`, `2=topology_proxy`.
+
+The production report adds `truth_proxy_summary.md` when these columns are
+present. It records candidate-level match fractions, event-level
+efficiency-like quantities, response and resolution summaries, and links to the
+truth-proxy plots. These are demonstrator-level checks over accepted
+candidates; they are not final analysis efficiencies.
 
 Plots use a compact HEP-style matplotlib configuration when plotting is
 available: 6-inch-scale figures, 10-12 pt fonts, step histograms, axis units,
@@ -578,9 +610,9 @@ Higgs, rho0, gamma plus pions without rho0, and events where the simple Stage
 The small two-file survey over 1000 events per file found `25` and `22` in all
 events, a small number of `113` entries, and some charged pions, but no explicit
 `113 -> pi+ pi-` relation and no Higgs/rho ancestry for the charged pions. It
-therefore recommends treating the current ancestry as insufficient and using a
-nearest final-state photon/pi+pi- matching diagnostic, plus generator-level
-invariant-mass checks, for the next truth-validation stage.
+therefore recommends treating the current ancestry as insufficient. Stage 15
+implements that recommendation as a topology-aware truth-proxy matcher using
+the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
 
 ## Known Limitations
 
@@ -602,12 +634,16 @@ invariant-mass checks, for the next truth-validation stage.
   credentials and reachable redirectors.
 - Track-quality cuts using `dz`, `dxy`, or object quality flags are deferred
   because those branches were not part of the confirmed local branch set.
+- Truth-proxy matching uses nearest GenPart charged pions because the local
+  signal sample does not expose useful pion ancestry for this purpose. The
+  resulting proxy response plots are validation diagnostics, not a substitute
+  for a generator-level decay-chain truth definition.
 
 ## Next Extension Points
 
 - Add Condor or workflow integration after the manifest-scale script is stable.
 - Add analysis-grade histogram output after the CSV and candidate-skim checks
   are validated.
-- Add truth matching and generator-level validation as a separate, explicit
-  physics-validation stage.
+- Refine the truth-proxy matcher after comparing it with any future sample that
+  exposes an explicit `rho0 -> pi+ pi-` generator chain.
 - Extend the branch catalogue when true scouting-object files are available.

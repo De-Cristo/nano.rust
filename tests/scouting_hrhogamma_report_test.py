@@ -11,6 +11,7 @@ REPORT_SCRIPT = REPO_ROOT / "scripts" / "write_scouting_hrhogamma_report.py"
 PRODUCTION_SCRIPT = REPO_ROOT / "scripts" / "run_scouting_hrhogamma_signal.py"
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
 TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
+TRUTH_PROXY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
 PER_FILE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal" / "per_file"
 
 
@@ -144,6 +145,54 @@ class ScoutingHToRhoGammaReportTest(unittest.TestCase):
             self.assertIn("dR(photon), dR(pi+), dR(pi-) < 0.1", text)
             self.assertIn("| delta_r_reco_photon_gen_photon | 2 | 0.010000 | 0.325000 |", text)
             self.assertIn("- [truth_matched_fraction](plots/truth_matched_fraction.png)", text)
+
+    def test_report_recognizes_truth_proxy_columns_and_writes_efficiency_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            plots = outdir / "plots"
+            plots.mkdir(parents=True)
+            for name in (
+                "truth_proxy_match_thresholds.png",
+                "reco_h_mass_minus_gen_h_proxy_mass.png",
+            ):
+                (plots / name).write_bytes(b"fake png")
+            combined_csv = outdir / "combined_candidates.csv"
+            combined_csv.write_text(TRUTH_PROXY_FIXTURE.read_text())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT_SCRIPT),
+                    "--csv",
+                    str(combined_csv),
+                    "--outdir",
+                    str(outdir),
+                    "--processed-events",
+                    "100",
+                    "--accepted-candidates",
+                    "3",
+                    "--plots-status",
+                    "wrote 40 PNG files and 40 PDF files",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "physics_summary.md").read_text()
+            truth_proxy = outdir / "truth_proxy_summary.md"
+            self.assertTrue(truth_proxy.exists())
+            proxy_text = truth_proxy.read_text()
+            self.assertIn("## Truth-Proxy Efficiency And Resolution", text)
+            self.assertIn("[truth_proxy_summary.md](truth_proxy_summary.md)", text)
+            self.assertIn("truth-proxy matched dR<0.1: `1` / `3` (`0.333333`)", proxy_text)
+            self.assertIn("truth-proxy matched dR<0.2: `2` / `3` (`0.666667`)", proxy_text)
+            self.assertIn("truth-proxy matched dR<0.3: `2` / `3` (`0.666667`)", proxy_text)
+            self.assertIn("unique accepted-event fraction: `0.030000`", proxy_text)
+            self.assertIn("| reco_h_mass_minus_gen_h_proxy_mass | 2 | 0.400000 | 1.200000 |", proxy_text)
+            self.assertIn("- [truth_proxy_match_thresholds](plots/truth_proxy_match_thresholds.png)", proxy_text)
 
     def test_report_handles_absent_truth_columns_gracefully(self):
         with tempfile.TemporaryDirectory() as tmp:

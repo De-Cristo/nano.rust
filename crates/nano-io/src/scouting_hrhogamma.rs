@@ -559,6 +559,8 @@ pub struct GenParticle {
     pub eta: f64,
     pub phi: f64,
     pub mass: f64,
+    pub status: i32,
+    pub status_flags: u16,
 }
 
 impl GenParticle {
@@ -577,6 +579,56 @@ impl GenParticle {
             eta,
             phi,
             mass,
+            status: 0,
+            status_flags: 0,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_status(
+        pdg_id: i32,
+        mother_index: Option<usize>,
+        pt: f64,
+        eta: f64,
+        phi: f64,
+        mass: f64,
+        status: i32,
+        status_flags: u16,
+    ) -> Self {
+        Self {
+            pdg_id,
+            mother_index,
+            pt,
+            eta,
+            phi,
+            mass,
+            status,
+            status_flags,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthStrategy {
+    None,
+    ExplicitChain,
+    TopologyProxy,
+}
+
+impl TruthStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ExplicitChain => "explicit_chain",
+            Self::TopologyProxy => "topology_proxy",
+        }
+    }
+
+    pub fn code(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::ExplicitChain => 1,
+            Self::TopologyProxy => 2,
         }
     }
 }
@@ -645,43 +697,81 @@ impl HToRhoGammaTruth {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TruthMatchResult {
+    pub truth_strategy: TruthStrategy,
     pub truth_available: bool,
     pub truth_topology: TruthTopology,
     pub truth_matched: bool,
+    pub truth_proxy_matched: bool,
+    pub truth_proxy_matched_dr_0p1: bool,
+    pub truth_proxy_matched_dr_0p2: bool,
+    pub truth_proxy_matched_dr_0p3: bool,
+    pub truth_photon_anchor_available: bool,
+    pub gen_photon_from_higgs: bool,
+    pub nearest_gen_pi_plus_available: bool,
+    pub nearest_gen_pi_minus_available: bool,
     pub gen_h: Option<GenParticle>,
     pub gen_rho: Option<GenParticle>,
     pub gen_photon: Option<GenParticle>,
     pub gen_pi_plus: Option<GenParticle>,
     pub gen_pi_minus: Option<GenParticle>,
+    pub gen_h_proxy: Option<GenParticle>,
+    pub gen_rho_proxy: Option<GenParticle>,
     pub delta_r_reco_photon_gen_photon: Option<f64>,
     pub delta_r_reco_pi_plus_gen_pi_plus: Option<f64>,
     pub delta_r_reco_pi_minus_gen_pi_minus: Option<f64>,
     pub delta_r_reco_rho_gen_rho: Option<f64>,
+    pub delta_r_reco_rho_gen_rho_proxy: Option<f64>,
+    pub delta_r_reco_h_gen_h_proxy: Option<f64>,
     pub reco_h_mass_minus_gen_h_mass: Option<f64>,
     pub reco_rho_mass_minus_gen_rho_mass: Option<f64>,
+    pub reco_h_mass_minus_gen_h_proxy_mass: Option<f64>,
+    pub reco_rho_mass_minus_gen_rho_proxy_mass: Option<f64>,
     pub reco_photon_pt_over_gen_photon_pt: Option<f64>,
     pub reco_rho_pt_over_gen_rho_pt: Option<f64>,
+    pub reco_pi_plus_pt_over_gen_pi_plus_pt: Option<f64>,
+    pub reco_pi_minus_pt_over_gen_pi_minus_pt: Option<f64>,
+    pub reco_rho_pt_over_gen_rho_proxy_pt: Option<f64>,
+    pub reco_h_pt_over_gen_h_proxy_pt: Option<f64>,
 }
 
 impl TruthMatchResult {
     pub fn not_available() -> Self {
         Self {
+            truth_strategy: TruthStrategy::None,
             truth_available: false,
             truth_topology: TruthTopology::NotAvailable,
             truth_matched: false,
+            truth_proxy_matched: false,
+            truth_proxy_matched_dr_0p1: false,
+            truth_proxy_matched_dr_0p2: false,
+            truth_proxy_matched_dr_0p3: false,
+            truth_photon_anchor_available: false,
+            gen_photon_from_higgs: false,
+            nearest_gen_pi_plus_available: false,
+            nearest_gen_pi_minus_available: false,
             gen_h: None,
             gen_rho: None,
             gen_photon: None,
             gen_pi_plus: None,
             gen_pi_minus: None,
+            gen_h_proxy: None,
+            gen_rho_proxy: None,
             delta_r_reco_photon_gen_photon: None,
             delta_r_reco_pi_plus_gen_pi_plus: None,
             delta_r_reco_pi_minus_gen_pi_minus: None,
             delta_r_reco_rho_gen_rho: None,
+            delta_r_reco_rho_gen_rho_proxy: None,
+            delta_r_reco_h_gen_h_proxy: None,
             reco_h_mass_minus_gen_h_mass: None,
             reco_rho_mass_minus_gen_rho_mass: None,
+            reco_h_mass_minus_gen_h_proxy_mass: None,
+            reco_rho_mass_minus_gen_rho_proxy_mass: None,
             reco_photon_pt_over_gen_photon_pt: None,
             reco_rho_pt_over_gen_rho_pt: None,
+            reco_pi_plus_pt_over_gen_pi_plus_pt: None,
+            reco_pi_minus_pt_over_gen_pi_minus_pt: None,
+            reco_rho_pt_over_gen_rho_proxy_pt: None,
+            reco_h_pt_over_gen_h_proxy_pt: None,
         }
     }
 }
@@ -778,26 +868,221 @@ pub fn match_reco_to_truth(h: &HCand, truth: Option<&HToRhoGammaTruth>) -> Truth
         .into_iter()
         .all(|value| value.is_some_and(|dr| dr < TRUTH_MATCH_DELTA_R_MAX));
     TruthMatchResult {
+        truth_strategy: TruthStrategy::ExplicitChain,
         truth_available: !matches!(truth.topology, TruthTopology::NotAvailable),
         truth_topology: truth.topology,
         truth_matched,
+        truth_proxy_matched: truth_matched,
+        truth_proxy_matched_dr_0p1: truth_matched,
+        truth_proxy_matched_dr_0p2: [dr_photon, dr_pi_plus, dr_pi_minus]
+            .into_iter()
+            .all(|value| value.is_some_and(|dr| dr < 0.2)),
+        truth_proxy_matched_dr_0p3: [dr_photon, dr_pi_plus, dr_pi_minus]
+            .into_iter()
+            .all(|value| value.is_some_and(|dr| dr < 0.3)),
+        truth_photon_anchor_available: truth.photon.is_some(),
+        gen_photon_from_higgs: truth.photon.is_some(),
+        nearest_gen_pi_plus_available: truth.pi_plus.is_some(),
+        nearest_gen_pi_minus_available: truth.pi_minus.is_some(),
         gen_h: truth.h,
         gen_rho: truth.rho,
         gen_photon: truth.photon,
         gen_pi_plus: truth.pi_plus,
         gen_pi_minus: truth.pi_minus,
+        gen_h_proxy: truth.h,
+        gen_rho_proxy: truth.rho,
         delta_r_reco_photon_gen_photon: dr_photon,
         delta_r_reco_pi_plus_gen_pi_plus: dr_pi_plus,
         delta_r_reco_pi_minus_gen_pi_minus: dr_pi_minus,
         delta_r_reco_rho_gen_rho: dr_rho,
+        delta_r_reco_rho_gen_rho_proxy: dr_rho,
+        delta_r_reco_h_gen_h_proxy: truth.h.map(|gen| delta_r(h.eta, h.phi, gen.eta, gen.phi)),
         reco_h_mass_minus_gen_h_mass: truth.h.map(|gen| h.mass - gen.mass),
         reco_rho_mass_minus_gen_rho_mass: truth.rho.map(|gen| h.rho.mass - gen.mass),
+        reco_h_mass_minus_gen_h_proxy_mass: truth.h.map(|gen| h.mass - gen.mass),
+        reco_rho_mass_minus_gen_rho_proxy_mass: truth.rho.map(|gen| h.rho.mass - gen.mass),
         reco_photon_pt_over_gen_photon_pt: truth
             .photon
-            .and_then(|gen| (gen.pt > 0.0).then_some(h.gamma.pt / gen.pt)),
-        reco_rho_pt_over_gen_rho_pt: truth
-            .rho
-            .and_then(|gen| (gen.pt > 0.0).then_some(h.rho.pt / gen.pt)),
+            .and_then(|gen| safe_ratio(h.gamma.pt, gen.pt)),
+        reco_rho_pt_over_gen_rho_pt: truth.rho.and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
+        reco_pi_plus_pt_over_gen_pi_plus_pt: truth
+            .pi_plus
+            .and_then(|gen| safe_ratio(h.rho.pi_plus.pt, gen.pt)),
+        reco_pi_minus_pt_over_gen_pi_minus_pt: truth
+            .pi_minus
+            .and_then(|gen| safe_ratio(h.rho.pi_minus.pt, gen.pt)),
+        reco_rho_pt_over_gen_rho_proxy_pt: truth.rho.and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
+        reco_h_pt_over_gen_h_proxy_pt: truth.h.and_then(|gen| safe_ratio(h.pt, gen.pt)),
+    }
+}
+
+pub fn match_reco_to_truth_proxy(h: &HCand, particles: Option<&[GenParticle]>) -> TruthMatchResult {
+    let Some(particles) = particles else {
+        return TruthMatchResult::not_available();
+    };
+
+    let photon =
+        nearest_gen_particle_by_delta_r(h.gamma.eta, h.gamma.phi, particles, |index, particle| {
+            particle.pdg_id == 22
+                && is_usable_gen_particle(*particle)
+                && has_gen_ancestor(particles, index, 25)
+        });
+    let pi_plus = nearest_gen_particle_by_delta_r(
+        h.rho.pi_plus.eta,
+        h.rho.pi_plus.phi,
+        particles,
+        |_index, particle| particle.pdg_id == 211 && is_usable_final_state_candidate(*particle),
+    );
+    let pi_minus = nearest_gen_particle_by_delta_r(
+        h.rho.pi_minus.eta,
+        h.rho.pi_minus.phi,
+        particles,
+        |_index, particle| particle.pdg_id == -211 && is_usable_final_state_candidate(*particle),
+    );
+
+    let gen_photon = photon.map(|matched| matched.particle);
+    let gen_pi_plus = pi_plus.map(|matched| matched.particle);
+    let gen_pi_minus = pi_minus.map(|matched| matched.particle);
+    let gen_rho_proxy = gen_pi_plus
+        .zip(gen_pi_minus)
+        .map(|(plus, minus)| proxy_particle(113, plus.p4().add(&minus.p4())));
+    let gen_h_proxy =
+        gen_photon
+            .zip(gen_pi_plus)
+            .zip(gen_pi_minus)
+            .map(|((photon, plus), minus)| {
+                proxy_particle(25, photon.p4().add(&plus.p4()).add(&minus.p4()))
+            });
+
+    let dr_photon = photon.map(|matched| matched.delta_r);
+    let dr_pi_plus = pi_plus.map(|matched| matched.delta_r);
+    let dr_pi_minus = pi_minus.map(|matched| matched.delta_r);
+    let matched_0p1 = proxy_threshold_match(dr_photon, dr_pi_plus, dr_pi_minus, 0.1);
+    let matched_0p2 = proxy_threshold_match(dr_photon, dr_pi_plus, dr_pi_minus, 0.2);
+    let matched_0p3 = proxy_threshold_match(dr_photon, dr_pi_plus, dr_pi_minus, 0.3);
+
+    TruthMatchResult {
+        truth_strategy: TruthStrategy::TopologyProxy,
+        truth_available: true,
+        truth_topology: TruthTopology::NotFound,
+        truth_matched: matched_0p1,
+        truth_proxy_matched: matched_0p1,
+        truth_proxy_matched_dr_0p1: matched_0p1,
+        truth_proxy_matched_dr_0p2: matched_0p2,
+        truth_proxy_matched_dr_0p3: matched_0p3,
+        truth_photon_anchor_available: gen_photon.is_some(),
+        gen_photon_from_higgs: gen_photon.is_some(),
+        nearest_gen_pi_plus_available: gen_pi_plus.is_some(),
+        nearest_gen_pi_minus_available: gen_pi_minus.is_some(),
+        gen_h: gen_h_proxy,
+        gen_rho: gen_rho_proxy,
+        gen_photon,
+        gen_pi_plus,
+        gen_pi_minus,
+        gen_h_proxy,
+        gen_rho_proxy,
+        delta_r_reco_photon_gen_photon: dr_photon,
+        delta_r_reco_pi_plus_gen_pi_plus: dr_pi_plus,
+        delta_r_reco_pi_minus_gen_pi_minus: dr_pi_minus,
+        delta_r_reco_rho_gen_rho: gen_rho_proxy
+            .map(|gen| delta_r(h.rho.eta, h.rho.phi, gen.eta, gen.phi)),
+        delta_r_reco_rho_gen_rho_proxy: gen_rho_proxy
+            .map(|gen| delta_r(h.rho.eta, h.rho.phi, gen.eta, gen.phi)),
+        delta_r_reco_h_gen_h_proxy: gen_h_proxy.map(|gen| delta_r(h.eta, h.phi, gen.eta, gen.phi)),
+        reco_h_mass_minus_gen_h_mass: gen_h_proxy.map(|gen| h.mass - gen.mass),
+        reco_rho_mass_minus_gen_rho_mass: gen_rho_proxy.map(|gen| h.rho.mass - gen.mass),
+        reco_h_mass_minus_gen_h_proxy_mass: gen_h_proxy.map(|gen| h.mass - gen.mass),
+        reco_rho_mass_minus_gen_rho_proxy_mass: gen_rho_proxy.map(|gen| h.rho.mass - gen.mass),
+        reco_photon_pt_over_gen_photon_pt: gen_photon
+            .and_then(|gen| safe_ratio(h.gamma.pt, gen.pt)),
+        reco_rho_pt_over_gen_rho_pt: gen_rho_proxy.and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
+        reco_pi_plus_pt_over_gen_pi_plus_pt: gen_pi_plus
+            .and_then(|gen| safe_ratio(h.rho.pi_plus.pt, gen.pt)),
+        reco_pi_minus_pt_over_gen_pi_minus_pt: gen_pi_minus
+            .and_then(|gen| safe_ratio(h.rho.pi_minus.pt, gen.pt)),
+        reco_rho_pt_over_gen_rho_proxy_pt: gen_rho_proxy
+            .and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
+        reco_h_pt_over_gen_h_proxy_pt: gen_h_proxy.and_then(|gen| safe_ratio(h.pt, gen.pt)),
+    }
+}
+
+pub fn has_gen_ancestor(particles: &[GenParticle], index: usize, ancestor_pdg_id: i32) -> bool {
+    let Some(mut current) = particles
+        .get(index)
+        .and_then(|particle| particle.mother_index)
+    else {
+        return false;
+    };
+    let mut seen = 0usize;
+    while seen <= particles.len() {
+        let Some(particle) = particles.get(current) else {
+            return false;
+        };
+        if particle.pdg_id == ancestor_pdg_id {
+            return true;
+        }
+        let Some(next) = particle.mother_index else {
+            return false;
+        };
+        current = next;
+        seen += 1;
+    }
+    false
+}
+
+pub fn safe_ratio(numerator: f64, denominator: f64) -> Option<f64> {
+    (denominator.is_finite() && denominator > 0.0).then_some(numerator / denominator)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MatchedGenParticle {
+    particle: GenParticle,
+    delta_r: f64,
+}
+
+fn nearest_gen_particle_by_delta_r(
+    reco_eta: f64,
+    reco_phi: f64,
+    particles: &[GenParticle],
+    predicate: impl Fn(usize, &GenParticle) -> bool,
+) -> Option<MatchedGenParticle> {
+    particles
+        .iter()
+        .enumerate()
+        .filter(|(index, particle)| predicate(*index, particle))
+        .map(|(_, particle)| MatchedGenParticle {
+            particle: *particle,
+            delta_r: delta_r(reco_eta, reco_phi, particle.eta, particle.phi),
+        })
+        .min_by(|a, b| a.delta_r.partial_cmp(&b.delta_r).unwrap_or(Ordering::Equal))
+}
+
+fn is_usable_gen_particle(particle: GenParticle) -> bool {
+    particle.pt > 0.1 && particle.eta.is_finite() && particle.phi.is_finite()
+}
+
+fn is_usable_final_state_candidate(particle: GenParticle) -> bool {
+    is_usable_gen_particle(particle) && (particle.status == 1 || particle.status == 0)
+}
+
+fn proxy_threshold_match(
+    dr_photon: Option<f64>,
+    dr_pi_plus: Option<f64>,
+    dr_pi_minus: Option<f64>,
+    threshold: f64,
+) -> bool {
+    [dr_photon, dr_pi_plus, dr_pi_minus]
+        .into_iter()
+        .all(|value| value.is_some_and(|dr| dr < threshold))
+}
+
+fn proxy_particle(pdg_id: i32, p4: FourVec) -> GenParticle {
+    GenParticle::with_status(pdg_id, None, p4.pt(), p4.eta(), p4.phi(), p4.mass(), 0, 0)
+}
+
+impl GenParticle {
+    fn p4(self) -> FourVec {
+        FourVec::from_pt_eta_phi_mass(self.pt, self.eta, self.phi, self.mass)
     }
 }
 
@@ -1332,5 +1617,141 @@ higgs_mass_reference = 125.0
         shifted_truth.photon = Some(GenParticle::new(22, Some(0), h.gamma.pt, 1.0, 1.0, 0.0));
         let mismatched = match_reco_to_truth(&h, Some(&shifted_truth));
         assert!(!mismatched.truth_matched);
+    }
+
+    #[test]
+    fn truth_proxy_matches_higgs_photon_and_nearest_pions_without_pion_ancestry() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+        let particles = [
+            GenParticle::with_status(25, None, 125.0, 0.0, 0.0, 125.0, 2, 26881),
+            GenParticle::with_status(22, Some(0), h.gamma.pt, 0.02, 0.02, 0.0, 1, 12289),
+            GenParticle::with_status(
+                211,
+                None,
+                h.rho.pi_plus.pt,
+                h.rho.pi_plus.eta + 0.02,
+                h.rho.pi_plus.phi + 0.02,
+                0.13957039,
+                1,
+                12308,
+            ),
+            GenParticle::with_status(
+                -211,
+                None,
+                h.rho.pi_minus.pt,
+                h.rho.pi_minus.eta - 0.02,
+                h.rho.pi_minus.phi - 0.02,
+                0.13957039,
+                1,
+                12308,
+            ),
+        ];
+
+        let proxy = match_reco_to_truth_proxy(&h, Some(&particles));
+
+        assert_eq!(proxy.truth_strategy, TruthStrategy::TopologyProxy);
+        assert!(proxy.truth_available);
+        assert!(proxy.truth_photon_anchor_available);
+        assert!(proxy.gen_photon_from_higgs);
+        assert!(proxy.nearest_gen_pi_plus_available);
+        assert!(proxy.nearest_gen_pi_minus_available);
+        assert!(proxy.truth_proxy_matched);
+        assert!(proxy.truth_proxy_matched_dr_0p1);
+        assert!(proxy.truth_proxy_matched_dr_0p2);
+        assert!(proxy.truth_proxy_matched_dr_0p3);
+        assert!(proxy.gen_rho_proxy.is_some());
+        assert!(proxy.gen_h_proxy.is_some());
+        assert!(proxy.delta_r_reco_rho_gen_rho_proxy.is_some());
+        assert!(proxy.delta_r_reco_h_gen_h_proxy.is_some());
+        assert!(proxy.reco_pi_plus_pt_over_gen_pi_plus_pt.is_some());
+        assert!(proxy.reco_pi_minus_pt_over_gen_pi_minus_pt.is_some());
+    }
+
+    #[test]
+    fn truth_proxy_threshold_flags_are_reported_independently() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+        let particles = [
+            GenParticle::with_status(25, None, 125.0, 0.0, 0.0, 125.0, 2, 26881),
+            GenParticle::with_status(22, Some(0), h.gamma.pt, 0.15, 0.0, 0.0, 1, 12289),
+            GenParticle::with_status(
+                211,
+                None,
+                h.rho.pi_plus.pt,
+                h.rho.pi_plus.eta,
+                h.rho.pi_plus.phi + 0.15,
+                0.13957039,
+                1,
+                12308,
+            ),
+            GenParticle::with_status(
+                -211,
+                None,
+                h.rho.pi_minus.pt,
+                h.rho.pi_minus.eta,
+                h.rho.pi_minus.phi + 0.15,
+                0.13957039,
+                1,
+                12308,
+            ),
+        ];
+
+        let proxy = match_reco_to_truth_proxy(&h, Some(&particles));
+
+        assert!(!proxy.truth_proxy_matched);
+        assert!(!proxy.truth_proxy_matched_dr_0p1);
+        assert!(proxy.truth_proxy_matched_dr_0p2);
+        assert!(proxy.truth_proxy_matched_dr_0p3);
+    }
+
+    #[test]
+    fn truth_proxy_handles_missing_gen_and_safe_ratio() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+
+        let proxy = match_reco_to_truth_proxy(&h, None);
+
+        assert_eq!(proxy.truth_strategy, TruthStrategy::None);
+        assert!(!proxy.truth_available);
+        assert!(!proxy.truth_proxy_matched);
+        assert_eq!(safe_ratio(1.0, 0.0), None);
+        assert_eq!(safe_ratio(2.0, 4.0), Some(0.5));
     }
 }
