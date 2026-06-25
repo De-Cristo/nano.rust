@@ -113,6 +113,44 @@ TRUTH_PROXY_PLOTS = (
     "reco_pi_minus_pt_vs_gen_pi_minus_pt.png",
     "reco_h_pt_vs_gen_h_proxy_pt.png",
 )
+HGAMMA_CLOSURE_REQUIRED_COLUMNS = (
+    "truth_strategy",
+    "hgamma_closure_available",
+    "hgamma_closure_matched",
+    "hgamma_photon_matched_dr_0p1",
+    "hgamma_higgs_closed_mass_15",
+)
+HGAMMA_CLOSURE_SUMMARY_COLUMNS = (
+    "delta_r_reco_photon_gen_photon",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_photon_eta_minus_gen_photon_eta",
+    "reco_photon_phi_minus_gen_photon_phi",
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_h_pt_over_gen_h_pt",
+    "delta_r_reco_h_gen_h",
+    "hgamma_gen_rho_recoil_mass",
+    "reco_rho_mass_minus_gen_rho_recoil_mass",
+    "reco_rho_pt_over_gen_rho_recoil_pt",
+    "delta_r_reco_rho_gen_rho_recoil",
+)
+HGAMMA_CLOSURE_PLOTS = (
+    "hgamma_higgs_closure_thresholds.png",
+    "hgamma_photon_match_dr.png",
+    "hgamma_reco_photon_pt_over_gen_photon_pt.png",
+    "hgamma_reco_h_mass_minus_gen_h_mass.png",
+    "hgamma_reco_h_pt_over_gen_h_pt.png",
+    "hgamma_delta_r_reco_h_gen_h.png",
+    "hgamma_gen_rho_recoil_mass.png",
+    "hgamma_reco_rho_mass_minus_gen_rho_recoil_mass.png",
+    "hgamma_reco_rho_pt_over_gen_rho_recoil_pt.png",
+    "hgamma_delta_r_reco_rho_gen_rho_recoil.png",
+    "hgamma_reco_h_mass_vs_gen_h_mass.png",
+    "hgamma_reco_rho_mass_vs_gen_rho_recoil_mass.png",
+    "hgamma_reco_photon_pt_vs_gen_photon_pt.png",
+    "hgamma_reco_rho_pt_vs_gen_rho_recoil_pt.png",
+    "hgamma_reco_h_pt_vs_gen_h_pt.png",
+    "hgamma_event_flow.png",
+)
 DEFAULT_RHO_WINDOW = (0.3, 1.2)
 
 
@@ -300,6 +338,10 @@ def has_truth_proxy_columns(fieldnames: list[str]) -> bool:
     return all(column in fieldnames for column in TRUTH_PROXY_REQUIRED_COLUMNS)
 
 
+def has_hgamma_closure_columns(fieldnames: list[str]) -> bool:
+    return all(column in fieldnames for column in HGAMMA_CLOSURE_REQUIRED_COLUMNS)
+
+
 def count_truth(rows: list[dict[str, str]], column: str, value: str) -> int:
     return sum(1 for row in rows if row.get(column, "") == value)
 
@@ -484,6 +526,81 @@ def truth_proxy_section(fieldnames: list[str]) -> list[str]:
     return lines
 
 
+def hgamma_closure_summary_text(
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+    outdir: Path,
+    plots_dir: Path,
+) -> str | None:
+    if not has_hgamma_closure_columns(fieldnames):
+        return None
+    total = len(rows)
+    available = count_truth(rows, "hgamma_closure_available", "1")
+    matched = count_truth(rows, "hgamma_closure_matched", "1")
+    photon_0p1 = count_truth(rows, "hgamma_photon_matched_dr_0p1", "1")
+    photon_0p2 = count_truth(rows, "hgamma_photon_matched_dr_0p2", "1")
+    mass_10 = count_truth(rows, "hgamma_higgs_closed_mass_10", "1")
+    mass_15 = count_truth(rows, "hgamma_higgs_closed_mass_15", "1")
+    mass_20 = count_truth(rows, "hgamma_higgs_closed_mass_20", "1")
+    lines = [
+        "# Photon-Anchored Higgs Closure Summary",
+        "",
+        "This is a demonstrator-level closure check. It matches reco gamma to a Higgs-descendant GenPart gamma, builds gen rho recoil as gen H - gen gamma, and compares reco rho/H against those objects.",
+        "",
+        "## Candidate-Level Closure Summary",
+        "",
+        f"- hgamma closure available candidates: `{available}` / `{total}` (`{fraction(available, total)}`)",
+        f"- hgamma closure matched candidates: `{matched}` / `{total}` (`{fraction(matched, total)}`)",
+        f"- photon matched dR<0.1: `{photon_0p1}` / `{total}` (`{fraction(photon_0p1, total)}`)",
+        f"- photon matched dR<0.2: `{photon_0p2}` / `{total}` (`{fraction(photon_0p2, total)}`)",
+        f"- Higgs closed |m(reco H)-m(gen H)|<10 GeV: `{mass_10}` / `{total}` (`{fraction(mass_10, total)}`)",
+        f"- Higgs closed |m(reco H)-m(gen H)|<15 GeV: `{mass_15}` / `{total}` (`{fraction(mass_15, total)}`)",
+        f"- Higgs closed |m(reco H)-m(gen H)|<20 GeV: `{mass_20}` / `{total}` (`{fraction(mass_20, total)}`)",
+        "",
+        "## Closure Variable Summaries",
+        "",
+        "| variable | count | min | mean | median | p16 | p50 | p84 | max |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for column in HGAMMA_CLOSURE_SUMMARY_COLUMNS:
+        if column not in fieldnames:
+            continue
+        summary = summarize(optional_numeric_values(rows, column))
+        if summary is None:
+            lines.append(f"| {column} | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+        else:
+            lines.append(
+                f"| {column} | {summary['count']} | {summary['min']:.6f} | "
+                f"{summary['mean']:.6f} | {summary['median']:.6f} | "
+                f"{summary['p16']:.6f} | {summary['p50']:.6f} | "
+                f"{summary['p84']:.6f} | {summary['max']:.6f} |"
+            )
+    lines.extend(["", "## Hgamma Closure Plot Index", ""])
+    produced = [
+        relative_link(outdir, plots_dir / name)
+        for name in HGAMMA_CLOSURE_PLOTS
+        if (plots_dir / name).exists()
+    ]
+    if produced:
+        lines.extend(f"- [{Path(path).stem}]({path})" for path in produced)
+    else:
+        lines.append("- No hgamma closure PNG plots are present.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def hgamma_closure_section(fieldnames: list[str]) -> list[str]:
+    lines = ["## Photon-Anchored Higgs Closure", ""]
+    if has_hgamma_closure_columns(fieldnames):
+        lines.append(
+            "See [hgamma_closure_summary.md](hgamma_closure_summary.md) for closure counts, response summaries, and plot links."
+        )
+    else:
+        lines.append("Photon-anchored Higgs closure columns are absent.")
+    lines.append("")
+    return lines
+
+
 def markdown_table(statistics_by_column: dict[str, dict[str, float | int] | None]) -> list[str]:
     lines = [
         "| variable | count | min | mean | median | p16 | p50 | p84 | max |",
@@ -575,6 +692,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
         "",
         *truth_section(rows, fieldnames, outdir, plots_dir),
         *truth_proxy_section(fieldnames),
+        *hgamma_closure_section(fieldnames),
         "## Plot Index",
         "",
     ]
@@ -626,6 +744,10 @@ def main() -> int:
         truth_proxy = truth_proxy_summary_text(args, rows, fieldnames, args.outdir, plots_dir)
         if truth_proxy is not None:
             (args.outdir / "truth_proxy_summary.md").write_text(truth_proxy)
+        hgamma_closure = hgamma_closure_summary_text(rows, fieldnames, args.outdir, plots_dir)
+        hgamma_path = args.outdir / "hgamma_closure_summary.md"
+        if hgamma_closure is not None and not hgamma_path.exists():
+            hgamma_path.write_text(hgamma_closure)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

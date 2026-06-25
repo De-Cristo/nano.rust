@@ -108,6 +108,44 @@ const STAGE15_PROXY_HEADER: [&str; 42] = [
     "reco_h_pt_over_gen_h_proxy_pt",
 ];
 
+const STAGE16A_HGAMMA_HEADER: [&str; 35] = [
+    "truth_strategy",
+    "hgamma_closure_available",
+    "hgamma_closure_matched",
+    "hgamma_gen_h_available",
+    "hgamma_gen_gamma_available",
+    "hgamma_gen_rho_recoil_available",
+    "hgamma_photon_matched_dr_0p1",
+    "hgamma_photon_matched_dr_0p2",
+    "hgamma_higgs_closed_mass_10",
+    "hgamma_higgs_closed_mass_15",
+    "hgamma_higgs_closed_mass_20",
+    "hgamma_higgs_closed_dr_0p3",
+    "hgamma_higgs_closed_dr_0p5",
+    "hgamma_gen_h_pt",
+    "hgamma_gen_h_eta",
+    "hgamma_gen_h_phi",
+    "hgamma_gen_h_mass",
+    "hgamma_gen_gamma_pt",
+    "hgamma_gen_gamma_eta",
+    "hgamma_gen_gamma_phi",
+    "hgamma_gen_gamma_mass",
+    "hgamma_gen_rho_recoil_pt",
+    "hgamma_gen_rho_recoil_eta",
+    "hgamma_gen_rho_recoil_phi",
+    "hgamma_gen_rho_recoil_mass",
+    "delta_r_reco_photon_gen_photon",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_photon_eta_minus_gen_photon_eta",
+    "reco_photon_phi_minus_gen_photon_phi",
+    "delta_r_reco_h_gen_h",
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_h_pt_over_gen_h_pt",
+    "delta_r_reco_rho_gen_rho_recoil",
+    "reco_rho_mass_minus_gen_rho_recoil_mass",
+    "reco_rho_pt_over_gen_rho_recoil_pt",
+];
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.len() != 2 || args.iter().any(|arg| arg == "-h" || arg == "--help") {
@@ -239,8 +277,13 @@ fn validate_header(header: &[String]) -> Result<(), Box<dyn Error>> {
         .chain(STAGE15_PROXY_HEADER.iter())
         .copied()
         .collect::<Vec<_>>();
+    let stage16a = HEADER
+        .iter()
+        .chain(STAGE16A_HGAMMA_HEADER.iter())
+        .copied()
+        .collect::<Vec<_>>();
     let as_str = header.iter().map(String::as_str).collect::<Vec<_>>();
-    if as_str == base || as_str == stage14 || as_str == stage15 {
+    if as_str == base || as_str == stage14 || as_str == stage15 || as_str == stage16a {
         Ok(())
     } else {
         Err(format!("unexpected candidate CSV header: {}", header.join(",")).into())
@@ -260,6 +303,18 @@ fn is_bool_column(column: &str) -> bool {
             | "gen_photon_from_higgs"
             | "nearest_gen_pi_plus_available"
             | "nearest_gen_pi_minus_available"
+            | "hgamma_closure_available"
+            | "hgamma_closure_matched"
+            | "hgamma_gen_h_available"
+            | "hgamma_gen_gamma_available"
+            | "hgamma_gen_rho_recoil_available"
+            | "hgamma_photon_matched_dr_0p1"
+            | "hgamma_photon_matched_dr_0p2"
+            | "hgamma_higgs_closed_mass_10"
+            | "hgamma_higgs_closed_mass_15"
+            | "hgamma_higgs_closed_mass_20"
+            | "hgamma_higgs_closed_dr_0p3"
+            | "hgamma_higgs_closed_dr_0p5"
     )
 }
 
@@ -318,8 +373,9 @@ fn topology_code(value: &str) -> i32 {
 
 fn strategy_code(value: &str) -> i32 {
     match value {
-        "explicit_chain" => 1,
-        "topology_proxy" => 2,
+        "topology_proxy" => 1,
+        "hgamma_closure" => 2,
+        "explicit_chain" => 3,
         _ => 0,
     }
 }

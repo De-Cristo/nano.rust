@@ -11,7 +11,7 @@ import posixpath
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -34,6 +34,19 @@ CSV_HEADER = (
     "pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,"
     "rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,"
     "delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt"
+)
+HGAMMA_EVENT_COUNT_KEYS = (
+    "hgamma_events_total",
+    "hgamma_events_with_gen_h",
+    "hgamma_events_with_gen_hgamma",
+    "hgamma_events_with_reco_photon_preselection",
+    "hgamma_events_with_reco_photon_matched_dr_0p1",
+    "hgamma_events_with_reco_photon_matched_dr_0p2",
+    "hgamma_events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair",
+    "hgamma_events_with_reco_photon_matched_dr_0p1_and_accepted_candidate",
+    "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10",
+    "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15",
+    "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20",
 )
 
 
@@ -71,6 +84,7 @@ class FileResult:
     csv_rows: int
     download_status: str
     run_status: str
+    hgamma_counts: dict[str, int] = field(default_factory=dict)
 
 
 def parse_args() -> argparse.Namespace:
@@ -151,6 +165,12 @@ def parse_args() -> argparse.Namespace:
         "--truth",
         action="store_true",
         help="request optional GenPart truth validation in the Rust example",
+    )
+    parser.add_argument(
+        "--truth-strategy",
+        choices=("topology-proxy", "hgamma-closure"),
+        default="topology-proxy",
+        help="truth validation strategy forwarded to the Rust example when --truth is set",
     )
     parser.add_argument(
         "--release",
@@ -481,6 +501,10 @@ def parse_count(stdout: str, key: str) -> int:
     return 0
 
 
+def parse_hgamma_counts(stdout: str) -> dict[str, int]:
+    return {key: parse_count(stdout, key) for key in HGAMMA_EVENT_COUNT_KEYS}
+
+
 def download_remote_input(
     args: argparse.Namespace,
     plan: InputPlan,
@@ -539,6 +563,7 @@ def reco_command(
         command.extend(["--csv", str(csv_path)])
     if args.truth:
         command.append("--truth")
+        command.extend(["--truth-strategy", args.truth_strategy])
     return command
 
 
@@ -557,6 +582,7 @@ def run_file(
 
     if args.plots_only or args.report_only:
         rows = count_csv_rows(csv_path)
+        stdout = stdout_path.read_text() if stdout_path.exists() else ""
         return FileResult(
             index,
             plan.original_input,
@@ -568,6 +594,7 @@ def run_file(
             rows,
             "not run (report-only)" if args.report_only else "not run (plots-only)",
             "report-only" if args.report_only else "plots-only",
+            parse_hgamma_counts(stdout),
         )
 
     if args.skip_existing and csv_path.exists() and stdout_path.exists():
@@ -583,6 +610,7 @@ def run_file(
             count_csv_rows(csv_path),
             "not run (skip-existing)",
             "skipped",
+            parse_hgamma_counts(stdout),
         )
 
     download_status = download_remote_input(args, plan, index, outdir)
@@ -623,6 +651,7 @@ def run_file(
         0 if args.no_csv else count_csv_rows(csv_path),
         download_status,
         "ok",
+        parse_hgamma_counts(result.stdout),
     )
 
 
@@ -727,6 +756,153 @@ def run_plots(args: argparse.Namespace, combined_csv: Path, plots_dir: Path) -> 
             if line.startswith("plots:"):
                 return line.split(":", 1)[1].strip()
     return "requested"
+
+
+def fraction(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "unavailable"
+    return f"{numerator / denominator:.6f}"
+
+
+def truth_column_count(csv_path: Path, column: str) -> int:
+    if not csv_path.exists():
+        return 0
+    with csv_path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or column not in reader.fieldnames:
+            return 0
+        return sum(1 for row in reader if row.get(column) == "1")
+
+
+def write_hgamma_event_flow_plot(summary: dict[str, object], plots_dir: Path) -> str:
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    labels = [
+        "total",
+        "gen H",
+        "gen Hgamma",
+        "reco gamma",
+        "gamma dR<0.1",
+        "OS tracks",
+        "accepted",
+        "|dmH|<15",
+    ]
+    values = [
+        int(summary.get("hgamma_events_total", 0)),
+        int(summary.get("hgamma_events_with_gen_h", 0)),
+        int(summary.get("hgamma_events_with_gen_hgamma", 0)),
+        int(summary.get("hgamma_events_with_reco_photon_preselection", 0)),
+        int(summary.get("hgamma_events_with_reco_photon_matched_dr_0p1", 0)),
+        int(
+            summary.get(
+                "hgamma_events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair",
+                0,
+            )
+        ),
+        int(
+            summary.get(
+                "hgamma_events_with_reco_photon_matched_dr_0p1_and_accepted_candidate",
+                0,
+            )
+        ),
+        int(
+            summary.get(
+                "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15",
+                0,
+            )
+        ),
+    ]
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return "skipped (matplotlib unavailable)"
+
+    figure, axis = plt.subplots(figsize=(7.2, 4.2), constrained_layout=True)
+    axis.bar(labels, values, color="#2f6fbb")
+    axis.tick_params(axis="x", labelrotation=25)
+    axis.set_ylabel("Events")
+    axis.set_title("Photon-anchored Higgs closure event flow", fontsize=11)
+    output = plots_dir / "hgamma_event_flow.png"
+    figure.savefig(output)
+    figure.savefig(output.with_suffix(".pdf"))
+    plt.close(figure)
+    return str(output)
+
+
+def write_hgamma_closure_summary(
+    args: argparse.Namespace,
+    outdir: Path,
+    results: list[FileResult],
+    combined_csv: Path,
+    plots_dir: Path,
+) -> Path | None:
+    if not args.truth or args.truth_strategy != "hgamma-closure":
+        return None
+    totals = {
+        key: sum(result.hgamma_counts.get(key, 0) for result in results)
+        for key in HGAMMA_EVENT_COUNT_KEYS
+    }
+    candidate_rows = count_csv_rows(combined_csv) if combined_csv.exists() else 0
+    summary = {
+        "truth_strategy": args.truth_strategy,
+        **totals,
+        "candidate_rows": candidate_rows,
+        "hgamma_closure_available_candidates": truth_column_count(
+            combined_csv, "hgamma_closure_available"
+        ),
+        "hgamma_closure_matched_candidates": truth_column_count(
+            combined_csv, "hgamma_closure_matched"
+        ),
+        "hgamma_photon_matched_dr_0p1_candidates": truth_column_count(
+            combined_csv, "hgamma_photon_matched_dr_0p1"
+        ),
+        "hgamma_higgs_closed_mass_10_candidates": truth_column_count(
+            combined_csv, "hgamma_higgs_closed_mass_10"
+        ),
+        "hgamma_higgs_closed_mass_15_candidates": truth_column_count(
+            combined_csv, "hgamma_higgs_closed_mass_15"
+        ),
+        "hgamma_higgs_closed_mass_20_candidates": truth_column_count(
+            combined_csv, "hgamma_higgs_closed_mass_20"
+        ),
+    }
+    event_flow_plot = write_hgamma_event_flow_plot(summary, plots_dir)
+    summary["hgamma_event_flow_plot"] = event_flow_plot
+
+    json_path = outdir / "hgamma_closure_summary.json"
+    json_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    lines = [
+        "# Photon-Anchored Higgs Closure Summary",
+        "",
+        "This report matches the selected reco photon to a Higgs-descendant GenPart photon, "
+        "builds the gen rho recoil as gen H - gen gamma, and checks reco rho/H closure.",
+        "",
+        f"truth_strategy: `{args.truth_strategy}`",
+        f"candidate rows: `{candidate_rows}`",
+        f"hgamma closure available candidates: `{summary['hgamma_closure_available_candidates']}` / `{candidate_rows}` (`{fraction(summary['hgamma_closure_available_candidates'], candidate_rows)}`)",
+        f"hgamma closure matched candidates: `{summary['hgamma_closure_matched_candidates']}` / `{candidate_rows}` (`{fraction(summary['hgamma_closure_matched_candidates'], candidate_rows)}`)",
+        f"photon matched dR<0.1 candidates: `{summary['hgamma_photon_matched_dr_0p1_candidates']}` / `{candidate_rows}` (`{fraction(summary['hgamma_photon_matched_dr_0p1_candidates'], candidate_rows)}`)",
+        f"Higgs closed |m(reco H)-m(gen H)|<15 GeV candidates: `{summary['hgamma_higgs_closed_mass_15_candidates']}` / `{candidate_rows}` (`{fraction(summary['hgamma_higgs_closed_mass_15_candidates'], candidate_rows)}`)",
+        "",
+        "## Event Flow",
+        "",
+    ]
+    for key in HGAMMA_EVENT_COUNT_KEYS:
+        lines.append(f"- {key}: `{summary[key]}`")
+    lines.extend(
+        [
+            "",
+            "## Artifacts",
+            "",
+            f"- JSON: [{json_path.name}]({json_path.name})",
+            f"- event flow plot: `{event_flow_plot}`",
+        ]
+    )
+    md_path = outdir / "hgamma_closure_summary.md"
+    md_path.write_text("\n".join(lines) + "\n")
+    return md_path
 
 
 def write_physics_report(
@@ -849,6 +1025,7 @@ def write_summary(
         f"cache_policy: {'clean after successful file' if args.clean_cache else 'keep cached files'}",
         f"force_download: {args.force_download}",
         f"truth: {args.truth}",
+        f"truth_strategy: {args.truth_strategy}",
         f"local_glob: {args.local_glob}",
         f"resolved_files: {resolved_count}",
         f"selected_files: {len(selected_inputs)}",
@@ -968,6 +1145,9 @@ def main() -> int:
                 combined_root = outdir / "combined_candidates.root"
                 write_combined_root(args, binaries, combined_csv, combined_root)
                 root_status = str(combined_root)
+
+        if not args.no_csv:
+            write_hgamma_closure_summary(args, outdir, results, combined_csv, plots_dir)
 
         write_summary(
             summary_path,

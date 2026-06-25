@@ -524,13 +524,111 @@ reco-gen `DeltaR` values, and response variables such as
 `reco_h_mass_minus_gen_h_proxy_mass` and
 `reco_h_pt_over_gen_h_proxy_pt`. The combined ROOT skim stores the same
 candidate-level quantities and encodes `truth_strategy` as
-`truth_strategy_code`: `0=none`, `1=explicit_chain`, `2=topology_proxy`.
+`truth_strategy_code`: `0=none`, `1=topology_proxy`, `2=hgamma_closure`,
+`3=explicit_chain`.
 
 The production report adds `truth_proxy_summary.md` when these columns are
 present. It records candidate-level match fractions, event-level
 efficiency-like quantities, response and resolution summaries, and links to the
 truth-proxy plots. These are demonstrator-level checks over accepted
 candidates; they are not final analysis efficiencies.
+
+## Photon-Anchored Higgs Closure Validation
+
+Stage 16A adds an explicit alternative truth strategy for the same accepted
+candidate reconstruction:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16a .venv/bin/python scripts/run_scouting_hrhogamma_signal.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir /tmp/scouting_hrhogamma_signal_stage16a_full_local \
+  --all-files \
+  --truth \
+  --truth-strategy hgamma-closure
+```
+
+`--truth` without `--truth-strategy` still uses the Stage 15
+`topology-proxy` mode. The `hgamma-closure` strategy instead:
+
+1. Selects a GenPart Higgs candidate and the Higgs-descendant GenPart photon
+   nearest to the reco photon.
+2. Builds the generator rho recoil as `gen H - gen gamma`.
+3. Compares reco photon, reco rho, and reco H against the photon, recoil, and
+   Higgs truth objects.
+4. Records photon-match flags for `DeltaR < 0.1` and `DeltaR < 0.2`, Higgs
+   mass-closure flags for `|m(reco H)-m(gen H)| < 10, 15, 20 GeV`, and Higgs
+   angular-closure flags for `DeltaR < 0.3` and `DeltaR < 0.5`.
+
+This is a closure validation anchored on the reliable Higgs photon, not a
+change to candidate reconstruction and not a pion ancestry efficiency
+measurement. The candidate CSV gains hgamma-specific columns including:
+
+```text
+truth_strategy
+hgamma_closure_available
+hgamma_closure_matched
+hgamma_gen_h_available
+hgamma_gen_gamma_available
+hgamma_gen_rho_recoil_available
+hgamma_photon_matched_dr_0p1
+hgamma_photon_matched_dr_0p2
+hgamma_higgs_closed_mass_10
+hgamma_higgs_closed_mass_15
+hgamma_higgs_closed_mass_20
+hgamma_higgs_closed_dr_0p3
+hgamma_higgs_closed_dr_0p5
+hgamma_gen_h_*
+hgamma_gen_gamma_*
+hgamma_gen_rho_recoil_*
+delta_r_reco_photon_gen_photon
+reco_photon_pt_over_gen_photon_pt
+reco_photon_eta_minus_gen_photon_eta
+reco_photon_phi_minus_gen_photon_phi
+delta_r_reco_h_gen_h
+reco_h_mass_minus_gen_h_mass
+reco_h_pt_over_gen_h_pt
+delta_r_reco_rho_gen_rho_recoil
+reco_rho_mass_minus_gen_rho_recoil_mass
+reco_rho_pt_over_gen_rho_recoil_pt
+```
+
+The Rust example also prints event-flow counters such as
+`hgamma_events_with_gen_hgamma`,
+`hgamma_events_with_reco_photon_matched_dr_0p1`, and
+`hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15`.
+The production runner aggregates those counters into:
+
+```text
+hgamma_closure_summary.json
+hgamma_closure_summary.md
+plots/hgamma_event_flow.png
+plots/hgamma_event_flow.pdf
+```
+
+The plotting script recognizes hgamma-closure CSVs and adds closure plots:
+
+```text
+hgamma_higgs_closure_thresholds.png
+hgamma_photon_match_dr.png
+hgamma_reco_photon_pt_over_gen_photon_pt.png
+hgamma_reco_h_mass_minus_gen_h_mass.png
+hgamma_reco_h_pt_over_gen_h_pt.png
+hgamma_delta_r_reco_h_gen_h.png
+hgamma_gen_rho_recoil_mass.png
+hgamma_reco_rho_mass_minus_gen_rho_recoil_mass.png
+hgamma_reco_rho_pt_over_gen_rho_recoil_pt.png
+hgamma_delta_r_reco_rho_gen_rho_recoil.png
+hgamma_reco_h_mass_vs_gen_h_mass.png
+hgamma_reco_rho_mass_vs_gen_rho_recoil_mass.png
+hgamma_reco_photon_pt_vs_gen_photon_pt.png
+hgamma_reco_rho_pt_vs_gen_rho_recoil_pt.png
+hgamma_reco_h_pt_vs_gen_h_pt.png
+```
+
+`physics_summary.md` links to `hgamma_closure_summary.md` when those columns
+are present. These plots and rates are signal-sample sanity checks for closure
+of the accepted candidate, not a final efficiency or resolution measurement.
 
 ## Charged-Pion Truth-Proxy Diagnosis
 

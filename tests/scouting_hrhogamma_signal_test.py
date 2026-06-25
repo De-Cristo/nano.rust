@@ -121,6 +121,34 @@ class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
         self.assertEqual(plan.run_input, str(plan.cached_input))
         self.assertTrue(str(plan.cached_input).startswith("/tmp/cache/file_000001_"))
 
+    def test_reco_command_forwards_hgamma_closure_truth_strategy(self):
+        args = run_signal.argparse.Namespace(
+            use_cargo_run=False,
+            release=False,
+            max_events_per_file=100,
+            config=Path("configs/scouting/h_rho_gamma.toml"),
+            no_csv=False,
+            truth=True,
+            truth_strategy="hgamma-closure",
+        )
+        binaries = run_signal.Binaries(
+            Path("target/debug/examples/scouting_h_rho_gamma"),
+            Path("target/debug/examples/scouting_h_rho_gamma_csv_to_root"),
+            "debug",
+        )
+
+        command = run_signal.reco_command(
+            args,
+            binaries,
+            "/tmp/input.root",
+            Path("/tmp/candidates.csv"),
+        )
+
+        self.assertIn("--truth", command)
+        self.assertIn("--truth-strategy", command)
+        strategy_index = command.index("--truth-strategy")
+        self.assertEqual(command[strategy_index + 1], "hgamma-closure")
+
     def test_dry_run_from_manifest_reports_limited_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp) / "signal"

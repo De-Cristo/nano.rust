@@ -12,6 +12,9 @@ PRODUCTION_SCRIPT = REPO_ROOT / "scripts" / "run_scouting_hrhogamma_signal.py"
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
 TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
 TRUTH_PROXY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
+HGAMMA_CLOSURE_FIXTURE = (
+    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_hgamma_closure_small.csv"
+)
 PER_FILE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal" / "per_file"
 
 
@@ -193,6 +196,54 @@ class ScoutingHToRhoGammaReportTest(unittest.TestCase):
             self.assertIn("unique accepted-event fraction: `0.030000`", proxy_text)
             self.assertIn("| reco_h_mass_minus_gen_h_proxy_mass | 2 | 0.400000 | 1.200000 |", proxy_text)
             self.assertIn("- [truth_proxy_match_thresholds](plots/truth_proxy_match_thresholds.png)", proxy_text)
+
+    def test_report_recognizes_hgamma_closure_columns_and_writes_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            plots = outdir / "plots"
+            plots.mkdir(parents=True)
+            for name in (
+                "hgamma_photon_match_dr.png",
+                "hgamma_reco_h_mass_minus_gen_h_mass.png",
+            ):
+                (plots / name).write_bytes(b"fake png")
+            combined_csv = outdir / "combined_candidates.csv"
+            combined_csv.write_text(HGAMMA_CLOSURE_FIXTURE.read_text())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT_SCRIPT),
+                    "--csv",
+                    str(combined_csv),
+                    "--outdir",
+                    str(outdir),
+                    "--processed-events",
+                    "100",
+                    "--accepted-candidates",
+                    "3",
+                    "--plots-status",
+                    "wrote 50 PNG files and 50 PDF files",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "physics_summary.md").read_text()
+            hgamma = outdir / "hgamma_closure_summary.md"
+            self.assertTrue(hgamma.exists())
+            hgamma_text = hgamma.read_text()
+            self.assertIn("## Photon-Anchored Higgs Closure", text)
+            self.assertIn("[hgamma_closure_summary.md](hgamma_closure_summary.md)", text)
+            self.assertIn("hgamma closure available candidates: `2` / `3` (`0.666667`)", hgamma_text)
+            self.assertIn("hgamma closure matched candidates: `1` / `3` (`0.333333`)", hgamma_text)
+            self.assertIn("photon matched dR<0.1: `2` / `3` (`0.666667`)", hgamma_text)
+            self.assertIn("Higgs closed |m(reco H)-m(gen H)|<15 GeV: `1` / `3` (`0.333333`)", hgamma_text)
+            self.assertIn("| reco_h_mass_minus_gen_h_mass | 2 | -1.000000 | 19.500000 |", hgamma_text)
+            self.assertIn("- [hgamma_photon_match_dr](plots/hgamma_photon_match_dr.png)", hgamma_text)
 
     def test_report_handles_absent_truth_columns_gracefully(self):
         with tempfile.TemporaryDirectory() as tmp:

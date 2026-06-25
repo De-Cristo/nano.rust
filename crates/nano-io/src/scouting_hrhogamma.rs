@@ -428,6 +428,15 @@ impl FourVec {
         }
     }
 
+    pub fn sub(&self, other: &Self) -> Self {
+        Self {
+            px: self.px - other.px,
+            py: self.py - other.py,
+            pz: self.pz - other.pz,
+            e: self.e - other.e,
+        }
+    }
+
     pub fn pt(&self) -> f64 {
         self.px.hypot(self.py)
     }
@@ -613,6 +622,7 @@ pub enum TruthStrategy {
     None,
     ExplicitChain,
     TopologyProxy,
+    HgammaClosure,
 }
 
 impl TruthStrategy {
@@ -621,14 +631,16 @@ impl TruthStrategy {
             Self::None => "none",
             Self::ExplicitChain => "explicit_chain",
             Self::TopologyProxy => "topology_proxy",
+            Self::HgammaClosure => "hgamma_closure",
         }
     }
 
     pub fn code(self) -> i32 {
         match self {
             Self::None => 0,
-            Self::ExplicitChain => 1,
-            Self::TopologyProxy => 2,
+            Self::TopologyProxy => 1,
+            Self::HgammaClosure => 2,
+            Self::ExplicitChain => 3,
         }
     }
 }
@@ -732,6 +744,28 @@ pub struct TruthMatchResult {
     pub reco_pi_minus_pt_over_gen_pi_minus_pt: Option<f64>,
     pub reco_rho_pt_over_gen_rho_proxy_pt: Option<f64>,
     pub reco_h_pt_over_gen_h_proxy_pt: Option<f64>,
+    pub hgamma_closure_available: bool,
+    pub hgamma_closure_matched: bool,
+    pub hgamma_gen_h_available: bool,
+    pub hgamma_gen_gamma_available: bool,
+    pub hgamma_gen_rho_recoil_available: bool,
+    pub hgamma_photon_matched_dr_0p1: bool,
+    pub hgamma_photon_matched_dr_0p2: bool,
+    pub hgamma_higgs_closed_mass_10: bool,
+    pub hgamma_higgs_closed_mass_15: bool,
+    pub hgamma_higgs_closed_mass_20: bool,
+    pub hgamma_higgs_closed_dr_0p3: bool,
+    pub hgamma_higgs_closed_dr_0p5: bool,
+    pub hgamma_gen_h: Option<GenParticle>,
+    pub hgamma_gen_gamma: Option<GenParticle>,
+    pub hgamma_gen_rho_recoil: Option<GenParticle>,
+    pub reco_photon_eta_minus_gen_photon_eta: Option<f64>,
+    pub reco_photon_phi_minus_gen_photon_phi: Option<f64>,
+    pub delta_r_reco_h_gen_h: Option<f64>,
+    pub reco_h_pt_over_gen_h_pt: Option<f64>,
+    pub delta_r_reco_rho_gen_rho_recoil: Option<f64>,
+    pub reco_rho_mass_minus_gen_rho_recoil_mass: Option<f64>,
+    pub reco_rho_pt_over_gen_rho_recoil_pt: Option<f64>,
 }
 
 impl TruthMatchResult {
@@ -772,8 +806,89 @@ impl TruthMatchResult {
             reco_pi_minus_pt_over_gen_pi_minus_pt: None,
             reco_rho_pt_over_gen_rho_proxy_pt: None,
             reco_h_pt_over_gen_h_proxy_pt: None,
+            hgamma_closure_available: false,
+            hgamma_closure_matched: false,
+            hgamma_gen_h_available: false,
+            hgamma_gen_gamma_available: false,
+            hgamma_gen_rho_recoil_available: false,
+            hgamma_photon_matched_dr_0p1: false,
+            hgamma_photon_matched_dr_0p2: false,
+            hgamma_higgs_closed_mass_10: false,
+            hgamma_higgs_closed_mass_15: false,
+            hgamma_higgs_closed_mass_20: false,
+            hgamma_higgs_closed_dr_0p3: false,
+            hgamma_higgs_closed_dr_0p5: false,
+            hgamma_gen_h: None,
+            hgamma_gen_gamma: None,
+            hgamma_gen_rho_recoil: None,
+            reco_photon_eta_minus_gen_photon_eta: None,
+            reco_photon_phi_minus_gen_photon_phi: None,
+            delta_r_reco_h_gen_h: None,
+            reco_h_pt_over_gen_h_pt: None,
+            delta_r_reco_rho_gen_rho_recoil: None,
+            reco_rho_mass_minus_gen_rho_recoil_mass: None,
+            reco_rho_pt_over_gen_rho_recoil_pt: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HgammaClosureEventFlags {
+    pub has_gen_h: bool,
+    pub has_gen_hgamma: bool,
+    pub has_reco_photon_preselection: bool,
+    pub photon_matched_dr_0p1: bool,
+    pub photon_matched_dr_0p2: bool,
+    pub has_os_track_pair: bool,
+    pub has_accepted_candidate: bool,
+    pub higgs_closed_mass_10: bool,
+    pub higgs_closed_mass_15: bool,
+    pub higgs_closed_mass_20: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HgammaClosureCounters {
+    pub events_total: usize,
+    pub events_with_gen_h: usize,
+    pub events_with_gen_hgamma: usize,
+    pub events_with_reco_photon_preselection: usize,
+    pub events_with_reco_photon_matched_dr_0p1: usize,
+    pub events_with_reco_photon_matched_dr_0p2: usize,
+    pub events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair: usize,
+    pub events_with_reco_photon_matched_dr_0p1_and_accepted_candidate: usize,
+    pub events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10: usize,
+    pub events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15: usize,
+    pub events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20: usize,
+}
+
+impl HgammaClosureCounters {
+    pub fn observe(&mut self, flags: HgammaClosureEventFlags) {
+        self.events_total += 1;
+        self.events_with_gen_h += usize::from(flags.has_gen_h);
+        self.events_with_gen_hgamma += usize::from(flags.has_gen_hgamma);
+        self.events_with_reco_photon_preselection +=
+            usize::from(flags.has_reco_photon_preselection);
+        self.events_with_reco_photon_matched_dr_0p1 += usize::from(flags.photon_matched_dr_0p1);
+        self.events_with_reco_photon_matched_dr_0p2 += usize::from(flags.photon_matched_dr_0p2);
+        self.events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair +=
+            usize::from(flags.photon_matched_dr_0p1 && flags.has_os_track_pair);
+        self.events_with_reco_photon_matched_dr_0p1_and_accepted_candidate +=
+            usize::from(flags.photon_matched_dr_0p1 && flags.has_accepted_candidate);
+        self.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10 +=
+            usize::from(flags.photon_matched_dr_0p1 && flags.higgs_closed_mass_10);
+        self.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15 +=
+            usize::from(flags.photon_matched_dr_0p1 && flags.higgs_closed_mass_15);
+        self.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20 +=
+            usize::from(flags.photon_matched_dr_0p1 && flags.higgs_closed_mass_20);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HgammaClosureTruthObjects {
+    pub gen_h: Option<GenParticle>,
+    pub gen_gamma: Option<GenParticle>,
+    pub gen_rho_recoil: Option<GenParticle>,
+    pub delta_r_reco_photon_gen_photon: Option<f64>,
 }
 
 pub fn identify_truth_chain(particles: &[GenParticle]) -> HToRhoGammaTruth {
@@ -913,6 +1028,7 @@ pub fn match_reco_to_truth(h: &HCand, truth: Option<&HToRhoGammaTruth>) -> Truth
             .and_then(|gen| safe_ratio(h.rho.pi_minus.pt, gen.pt)),
         reco_rho_pt_over_gen_rho_proxy_pt: truth.rho.and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
         reco_h_pt_over_gen_h_proxy_pt: truth.h.and_then(|gen| safe_ratio(h.pt, gen.pt)),
+        ..TruthMatchResult::not_available()
     }
 }
 
@@ -1003,6 +1119,131 @@ pub fn match_reco_to_truth_proxy(h: &HCand, particles: Option<&[GenParticle]>) -
         reco_rho_pt_over_gen_rho_proxy_pt: gen_rho_proxy
             .and_then(|gen| safe_ratio(h.rho.pt, gen.pt)),
         reco_h_pt_over_gen_h_proxy_pt: gen_h_proxy.and_then(|gen| safe_ratio(h.pt, gen.pt)),
+        ..TruthMatchResult::not_available()
+    }
+}
+
+pub fn hgamma_closure_truth_objects(
+    reco_photon: Option<&SimpleCand>,
+    particles: Option<&[GenParticle]>,
+) -> HgammaClosureTruthObjects {
+    let Some(particles) = particles else {
+        return HgammaClosureTruthObjects::default();
+    };
+    let Some((h_index, gen_h)) = select_gen_higgs(particles) else {
+        return HgammaClosureTruthObjects::default();
+    };
+    let gen_gamma = select_higgs_photon(particles, h_index, reco_photon);
+    let gen_rho_recoil = gen_gamma
+        .map(|gamma| gen_h.p4().sub(&gamma.p4()))
+        .filter(valid_recoil_p4)
+        .map(|p4| proxy_particle(113, p4));
+    let delta_r_reco_photon_gen_photon = reco_photon
+        .zip(gen_gamma)
+        .map(|(reco, gen)| delta_r(reco.eta, reco.phi, gen.eta, gen.phi));
+
+    HgammaClosureTruthObjects {
+        gen_h: Some(gen_h),
+        gen_gamma,
+        gen_rho_recoil,
+        delta_r_reco_photon_gen_photon,
+    }
+}
+
+pub fn match_reco_to_hgamma_closure(
+    h: &HCand,
+    particles: Option<&[GenParticle]>,
+) -> TruthMatchResult {
+    let objects = hgamma_closure_truth_objects(Some(&h.gamma), particles);
+    let Some(gen_h) = objects.gen_h else {
+        return TruthMatchResult::not_available();
+    };
+    let Some(gen_gamma) = objects.gen_gamma else {
+        return TruthMatchResult {
+            truth_strategy: TruthStrategy::HgammaClosure,
+            truth_available: false,
+            hgamma_gen_h_available: true,
+            hgamma_gen_h: Some(gen_h),
+            gen_h: Some(gen_h),
+            ..TruthMatchResult::not_available()
+        };
+    };
+    let Some(gen_rho_recoil) = objects.gen_rho_recoil else {
+        return TruthMatchResult {
+            truth_strategy: TruthStrategy::HgammaClosure,
+            truth_available: false,
+            hgamma_gen_h_available: true,
+            hgamma_gen_gamma_available: true,
+            hgamma_gen_h: Some(gen_h),
+            hgamma_gen_gamma: Some(gen_gamma),
+            gen_h: Some(gen_h),
+            gen_photon: Some(gen_gamma),
+            delta_r_reco_photon_gen_photon: objects.delta_r_reco_photon_gen_photon,
+            ..TruthMatchResult::not_available()
+        };
+    };
+
+    let dr_photon = objects.delta_r_reco_photon_gen_photon;
+    let dr_h = delta_r(h.eta, h.phi, gen_h.eta, gen_h.phi);
+    let dr_rho = delta_r(h.rho.eta, h.rho.phi, gen_rho_recoil.eta, gen_rho_recoil.phi);
+    let h_mass_diff = h.mass - gen_h.mass;
+    let rho_mass_diff = h.rho.mass - gen_rho_recoil.mass;
+    let photon_matched_0p1 = dr_photon.is_some_and(|dr| dr < 0.1);
+    let photon_matched_0p2 = dr_photon.is_some_and(|dr| dr < 0.2);
+    let higgs_closed_mass_10 = h_mass_diff.abs() < 10.0;
+    let higgs_closed_mass_15 = h_mass_diff.abs() < 15.0;
+    let higgs_closed_mass_20 = h_mass_diff.abs() < 20.0;
+    let higgs_closed_dr_0p3 = dr_h < 0.3;
+    let higgs_closed_dr_0p5 = dr_h < 0.5;
+    let hgamma_closure_matched = photon_matched_0p1 && higgs_closed_mass_15;
+
+    TruthMatchResult {
+        truth_strategy: TruthStrategy::HgammaClosure,
+        truth_available: true,
+        truth_topology: TruthTopology::NotFound,
+        truth_matched: hgamma_closure_matched,
+        truth_photon_anchor_available: true,
+        gen_photon_from_higgs: true,
+        gen_h: Some(gen_h),
+        gen_rho: Some(gen_rho_recoil),
+        gen_photon: Some(gen_gamma),
+        gen_h_proxy: Some(gen_h),
+        gen_rho_proxy: Some(gen_rho_recoil),
+        delta_r_reco_photon_gen_photon: dr_photon,
+        delta_r_reco_rho_gen_rho: Some(dr_rho),
+        delta_r_reco_rho_gen_rho_proxy: Some(dr_rho),
+        delta_r_reco_h_gen_h_proxy: Some(dr_h),
+        reco_h_mass_minus_gen_h_mass: Some(h_mass_diff),
+        reco_rho_mass_minus_gen_rho_mass: Some(rho_mass_diff),
+        reco_h_mass_minus_gen_h_proxy_mass: Some(h_mass_diff),
+        reco_rho_mass_minus_gen_rho_proxy_mass: Some(rho_mass_diff),
+        reco_photon_pt_over_gen_photon_pt: safe_ratio(h.gamma.pt, gen_gamma.pt),
+        reco_rho_pt_over_gen_rho_pt: safe_ratio(h.rho.pt, gen_rho_recoil.pt),
+        reco_rho_pt_over_gen_rho_proxy_pt: safe_ratio(h.rho.pt, gen_rho_recoil.pt),
+        reco_h_pt_over_gen_h_proxy_pt: safe_ratio(h.pt, gen_h.pt),
+        hgamma_closure_available: true,
+        hgamma_closure_matched,
+        hgamma_gen_h_available: true,
+        hgamma_gen_gamma_available: true,
+        hgamma_gen_rho_recoil_available: true,
+        hgamma_photon_matched_dr_0p1: photon_matched_0p1,
+        hgamma_photon_matched_dr_0p2: photon_matched_0p2,
+        hgamma_higgs_closed_mass_10: higgs_closed_mass_10,
+        hgamma_higgs_closed_mass_15: higgs_closed_mass_15,
+        hgamma_higgs_closed_mass_20: higgs_closed_mass_20,
+        hgamma_higgs_closed_dr_0p3: higgs_closed_dr_0p3,
+        hgamma_higgs_closed_dr_0p5: higgs_closed_dr_0p5,
+        hgamma_gen_h: Some(gen_h),
+        hgamma_gen_gamma: Some(gen_gamma),
+        hgamma_gen_rho_recoil: Some(gen_rho_recoil),
+        reco_photon_eta_minus_gen_photon_eta: Some(h.gamma.eta - gen_gamma.eta),
+        reco_photon_phi_minus_gen_photon_phi: Some(delta_phi(h.gamma.phi, gen_gamma.phi)),
+        delta_r_reco_h_gen_h: Some(dr_h),
+        reco_h_pt_over_gen_h_pt: safe_ratio(h.pt, gen_h.pt),
+        delta_r_reco_rho_gen_rho_recoil: Some(dr_rho),
+        reco_rho_mass_minus_gen_rho_recoil_mass: Some(rho_mass_diff),
+        reco_rho_pt_over_gen_rho_recoil_pt: safe_ratio(h.rho.pt, gen_rho_recoil.pt),
+        ..TruthMatchResult::not_available()
     }
 }
 
@@ -1055,6 +1296,65 @@ fn nearest_gen_particle_by_delta_r(
             delta_r: delta_r(reco_eta, reco_phi, particle.eta, particle.phi),
         })
         .min_by(|a, b| a.delta_r.partial_cmp(&b.delta_r).unwrap_or(Ordering::Equal))
+}
+
+fn select_gen_higgs(particles: &[GenParticle]) -> Option<(usize, GenParticle)> {
+    particles
+        .iter()
+        .enumerate()
+        .filter(|(_, particle)| particle.pdg_id == 25 && is_usable_gen_particle(**particle))
+        .max_by(|(_, a), (_, b)| {
+            a.status_flags
+                .cmp(&b.status_flags)
+                .then_with(|| a.status.cmp(&b.status))
+                .then_with(|| a.pt.partial_cmp(&b.pt).unwrap_or(Ordering::Equal))
+        })
+        .map(|(index, particle)| (index, *particle))
+}
+
+fn select_higgs_photon(
+    particles: &[GenParticle],
+    h_index: usize,
+    reco_photon: Option<&SimpleCand>,
+) -> Option<GenParticle> {
+    if let Some(reco) = reco_photon {
+        return nearest_gen_particle_by_delta_r(
+            reco.eta,
+            reco.phi,
+            particles,
+            |index, particle| {
+                particle.pdg_id == 22
+                    && is_usable_gen_particle(*particle)
+                    && is_descendant_of(particles, *particle, h_index)
+                    && index != h_index
+            },
+        )
+        .map(|matched| matched.particle);
+    }
+
+    particles
+        .iter()
+        .enumerate()
+        .filter(|(index, particle)| {
+            particle.pdg_id == 22
+                && is_usable_gen_particle(**particle)
+                && is_descendant_of(particles, **particle, h_index)
+                && *index != h_index
+        })
+        .max_by(|(_, a), (_, b)| a.pt.partial_cmp(&b.pt).unwrap_or(Ordering::Equal))
+        .map(|(_, particle)| *particle)
+}
+
+fn valid_recoil_p4(p4: &FourVec) -> bool {
+    p4.e.is_finite()
+        && p4.e > 0.0
+        && p4.px.is_finite()
+        && p4.py.is_finite()
+        && p4.pz.is_finite()
+        && p4.pt().is_finite()
+        && p4.eta().is_finite()
+        && p4.phi().is_finite()
+        && p4.mass().is_finite()
 }
 
 fn is_usable_gen_particle(particle: GenParticle) -> bool {
@@ -1753,5 +2053,138 @@ higgs_mass_reference = 125.0
         assert!(!proxy.truth_proxy_matched);
         assert_eq!(safe_ratio(1.0, 0.0), None);
         assert_eq!(safe_ratio(2.0, 4.0), Some(0.5));
+    }
+
+    #[test]
+    fn hgamma_closure_builds_recoil_and_closure_flags() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+        let particles = [
+            GenParticle::with_status(25, None, h.pt, h.eta, h.phi, h.mass, 2, 26881),
+            GenParticle::with_status(
+                22,
+                Some(0),
+                h.gamma.pt,
+                h.gamma.eta + 0.02,
+                h.gamma.phi + 0.02,
+                0.0,
+                1,
+                12289,
+            ),
+        ];
+
+        let closure = match_reco_to_hgamma_closure(&h, Some(&particles));
+
+        assert_eq!(closure.truth_strategy, TruthStrategy::HgammaClosure);
+        assert!(closure.hgamma_closure_available);
+        assert!(closure.hgamma_closure_matched);
+        assert!(closure.hgamma_gen_h_available);
+        assert!(closure.hgamma_gen_gamma_available);
+        assert!(closure.hgamma_gen_rho_recoil_available);
+        assert!(closure.hgamma_photon_matched_dr_0p1);
+        assert!(closure.hgamma_photon_matched_dr_0p2);
+        assert!(closure.hgamma_higgs_closed_mass_10);
+        assert!(closure.hgamma_higgs_closed_mass_15);
+        assert!(closure.hgamma_higgs_closed_mass_20);
+        assert!(closure.hgamma_higgs_closed_dr_0p3);
+        assert!(closure.hgamma_higgs_closed_dr_0p5);
+        assert!(closure.hgamma_gen_rho_recoil.is_some());
+        assert!(closure.delta_r_reco_rho_gen_rho_recoil.is_some());
+        assert!(closure.reco_rho_pt_over_gen_rho_recoil_pt.is_some());
+    }
+
+    #[test]
+    fn hgamma_closure_handles_missing_gen() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+
+        let closure = match_reco_to_hgamma_closure(&h, None);
+
+        assert_eq!(closure.truth_strategy, TruthStrategy::None);
+        assert!(!closure.hgamma_closure_available);
+        assert!(!closure.hgamma_closure_matched);
+        assert!(!closure.hgamma_gen_h_available);
+        assert!(!closure.hgamma_gen_gamma_available);
+        assert!(!closure.hgamma_gen_rho_recoil_available);
+    }
+
+    #[test]
+    fn hgamma_event_counters_update_from_event_state() {
+        let mut counters = HgammaClosureCounters::default();
+        counters.observe(HgammaClosureEventFlags {
+            has_gen_h: true,
+            has_gen_hgamma: true,
+            has_reco_photon_preselection: true,
+            photon_matched_dr_0p1: true,
+            photon_matched_dr_0p2: true,
+            has_os_track_pair: true,
+            has_accepted_candidate: true,
+            higgs_closed_mass_10: false,
+            higgs_closed_mass_15: true,
+            higgs_closed_mass_20: true,
+        });
+        counters.observe(HgammaClosureEventFlags {
+            has_gen_h: true,
+            has_gen_hgamma: false,
+            has_reco_photon_preselection: false,
+            photon_matched_dr_0p1: false,
+            photon_matched_dr_0p2: false,
+            has_os_track_pair: false,
+            has_accepted_candidate: false,
+            higgs_closed_mass_10: false,
+            higgs_closed_mass_15: false,
+            higgs_closed_mass_20: false,
+        });
+
+        assert_eq!(counters.events_total, 2);
+        assert_eq!(counters.events_with_gen_h, 2);
+        assert_eq!(counters.events_with_gen_hgamma, 1);
+        assert_eq!(counters.events_with_reco_photon_preselection, 1);
+        assert_eq!(counters.events_with_reco_photon_matched_dr_0p1, 1);
+        assert_eq!(counters.events_with_reco_photon_matched_dr_0p2, 1);
+        assert_eq!(
+            counters.events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair,
+            1
+        );
+        assert_eq!(
+            counters.events_with_reco_photon_matched_dr_0p1_and_accepted_candidate,
+            1
+        );
+        assert_eq!(
+            counters.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10,
+            0
+        );
+        assert_eq!(
+            counters.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15,
+            1
+        );
+        assert_eq!(
+            counters.events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20,
+            1
+        );
     }
 }

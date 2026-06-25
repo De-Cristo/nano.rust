@@ -13,6 +13,9 @@ TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidate
 TRUTH_PROXY_FIXTURE = (
     REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
 )
+HGAMMA_CLOSURE_FIXTURE = (
+    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_hgamma_closure_small.csv"
+)
 
 
 class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
@@ -99,6 +102,61 @@ class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
             self.assertIn("truth_proxy_matched_dr_0p3_count: 2", text)
             self.assertIn("truth_proxy_plot_expected: truth_proxy_match_thresholds.png", text)
             self.assertIn("truth_proxy_plot_expected: reco_h_mass_vs_gen_h_proxy_mass.png", text)
+
+    def test_hgamma_closure_columns_are_summarized_without_plots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "plots"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(HGAMMA_CLOSURE_FIXTURE),
+                    "--outdir",
+                    str(outdir),
+                    "--no-plots",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "summary.txt").read_text()
+            self.assertIn("hgamma_closure_columns: present", text)
+            self.assertIn("hgamma_closure_available_count: 2", text)
+            self.assertIn("hgamma_closure_matched_count: 1", text)
+            self.assertIn("hgamma_photon_matched_dr_0p1_count: 2", text)
+            self.assertIn("hgamma_higgs_closed_mass_15_count: 1", text)
+            self.assertIn("hgamma_plot_expected: hgamma_photon_match_dr.png", text)
+            self.assertIn("hgamma_plot_expected: hgamma_reco_h_mass_minus_gen_h_mass.png", text)
+
+    def test_hgamma_closure_plots_are_generated_when_matplotlib_is_available(self):
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            self.skipTest("matplotlib is not available")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "plots"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(HGAMMA_CLOSURE_FIXTURE),
+                    "--outdir",
+                    str(outdir),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((outdir / "hgamma_photon_match_dr.png").exists())
+            self.assertTrue((outdir / "hgamma_reco_h_mass_minus_gen_h_mass.png").exists())
+            self.assertTrue((outdir / "hgamma_reco_rho_mass_vs_gen_rho_recoil_mass.png").exists())
 
     def test_hep_style_configuration_helper_is_plain_matplotlib_safe(self):
         script = (REPO_ROOT / "scripts" / "plot_scouting_hrhogamma_csv.py").read_text()

@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
 use nano_io::scouting_hrhogamma::{
-    load_branch_mapping, match_reco_to_truth_proxy, reconstruct_event, EventInputs, GenParticle,
-    HCand, HToRhoGammaBranchMapping, HToRhoGammaCuts, TruthMatchResult, TruthTopology,
+    hgamma_closure_truth_objects, load_branch_mapping, match_reco_to_hgamma_closure,
+    match_reco_to_truth_proxy, reconstruct_event, EventInputs, GenParticle, HCand,
+    HToRhoGammaBranchMapping, HToRhoGammaCuts, HgammaClosureCounters, HgammaClosureEventFlags,
+    TruthMatchResult, TruthStrategy, TruthTopology,
 };
 use nano_io::writer::{write_events, OutputBranch};
 
@@ -29,11 +31,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut root_writer = options
         .root_path
         .as_deref()
-        .map(|_| CandidateRootWriter::new(options.truth));
+        .map(|_| CandidateRootWriter::new(options.truth_output()));
     let mut csv_writer = options
         .csv_path
         .as_deref()
-        .map(|path| CandidateCsvWriter::create(path, options.truth))
+        .map(|path| CandidateCsvWriter::create(path, options.truth_output()))
         .transpose()?;
     println!("input: {}", options.input.display());
     println!("max_events: {}", display_limit(options.max_events));
@@ -56,6 +58,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     println!("branch_schema: ok");
     println!("truth: {}", options.truth);
+    if options.truth {
+        println!(
+            "truth_strategy: {}",
+            truth_strategy_cli(options.truth_strategy)
+        );
+    }
     println!("branch_catalogue_source: {mapping_source}");
     println!(
         "branch_mapping: {}({}, {}, {}, {}), {}({}, {}, {}, {}, {}, {})",
@@ -94,7 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &cuts,
         &mapping,
         options.max_events,
-        options.truth,
+        options.truth_output(),
         csv_writer.as_mut(),
         root_writer.as_mut(),
     )?;
@@ -116,6 +124,7 @@ struct Options {
     csv_path: Option<PathBuf>,
     root_path: Option<PathBuf>,
     truth: bool,
+    truth_strategy: TruthStrategy,
 }
 
 impl Options {
@@ -124,6 +133,7 @@ impl Options {
         let mut csv_path = None;
         let mut root_path = None;
         let mut truth = false;
+        let mut truth_strategy = TruthStrategy::TopologyProxy;
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -138,6 +148,11 @@ impl Options {
                     root_path = Some(PathBuf::from(value));
                 }
                 "--truth" => {
+                    truth = true;
+                }
+                "--truth-strategy" => {
+                    let value = args.next().ok_or("missing value after --truth-strategy")?;
+                    truth_strategy = parse_truth_strategy(&value)?;
                     truth = true;
                 }
                 _ if arg.starts_with("--") => {
@@ -199,14 +214,39 @@ impl Options {
             csv_path,
             root_path,
             truth,
+            truth_strategy,
         }))
+    }
+
+    fn truth_output(&self) -> Option<TruthStrategy> {
+        self.truth.then_some(self.truth_strategy)
     }
 }
 
 fn print_usage() {
-    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]");
+    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root] [--truth] [--truth-strategy topology-proxy|hgamma-closure]");
     println!("or set {ENV_INPUT}=<input.root>");
     println!("default config: {DEFAULT_CONFIG_PATH}");
+}
+
+fn parse_truth_strategy(value: &str) -> Result<TruthStrategy, Box<dyn Error>> {
+    match value {
+        "topology-proxy" | "topology_proxy" => Ok(TruthStrategy::TopologyProxy),
+        "hgamma-closure" | "hgamma_closure" => Ok(TruthStrategy::HgammaClosure),
+        _ => Err(format!(
+            "unknown truth strategy {value}; expected topology-proxy or hgamma-closure"
+        )
+        .into()),
+    }
+}
+
+fn truth_strategy_cli(strategy: TruthStrategy) -> &'static str {
+    match strategy {
+        TruthStrategy::TopologyProxy => "topology-proxy",
+        TruthStrategy::HgammaClosure => "hgamma-closure",
+        TruthStrategy::ExplicitChain => "explicit-chain",
+        TruthStrategy::None => "none",
+    }
 }
 
 fn display_limit(limit: Option<usize>) -> String {
@@ -289,7 +329,7 @@ fn analyze(
     cuts: &HToRhoGammaCuts,
     mapping: &HToRhoGammaBranchMapping,
     max_events: Option<usize>,
-    truth_enabled: bool,
+    truth_strategy: Option<TruthStrategy>,
     mut csv_writer: Option<&mut CandidateCsvWriter>,
     mut root_writer: Option<&mut CandidateRootWriter>,
 ) -> Result<Report, Box<dyn Error>> {
@@ -366,43 +406,90 @@ fn analyze(
         report.pion_mass_sum += reco.source_pion_mass_sum;
         report.pion_mass_count += reco.source_pion_mass_count;
 
+        let mut particles_for_truth = None;
+        let mut hgamma_flags = None;
+        if matches!(truth_strategy, Some(TruthStrategy::HgammaClosure)) {
+            particles_for_truth = read_gen_particles(&event)?;
+            if particles_for_truth.is_some() {
+                report.truth_available_events += 1;
+            }
+            let objects =
+                hgamma_closure_truth_objects(reco.photon.as_ref(), particles_for_truth.as_deref());
+            hgamma_flags = Some(HgammaClosureEventFlags {
+                has_gen_h: objects.gen_h.is_some(),
+                has_gen_hgamma: objects.gen_h.is_some()
+                    && objects.gen_gamma.is_some()
+                    && objects.gen_rho_recoil.is_some(),
+                has_reco_photon_preselection: reco.photon.is_some(),
+                photon_matched_dr_0p1: objects
+                    .delta_r_reco_photon_gen_photon
+                    .is_some_and(|dr| dr < 0.1),
+                photon_matched_dr_0p2: objects
+                    .delta_r_reco_photon_gen_photon
+                    .is_some_and(|dr| dr < 0.2),
+                has_os_track_pair: reco.has_os_pt_pair,
+                has_accepted_candidate: false,
+                higgs_closed_mass_10: false,
+                higgs_closed_mass_15: false,
+                higgs_closed_mass_20: false,
+            });
+        }
+
         if reco.photon.is_none() {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         }
         report.cutflow.leading_photon += 1;
 
         if reco.pions.len() < 2 {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         }
         report.cutflow.two_pions += 1;
 
         if !reco.has_os_pt_pair {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         }
         report.cutflow.os_pt_pair += 1;
 
         if !reco.has_pipi_delta_r_pair {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         }
         report.cutflow.pipi_delta_r += 1;
 
         if reco.rho.is_none() {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         }
         report.cutflow.rho_mass_window += 1;
 
         let Some(h) = reco.h else {
+            observe_hgamma(&mut report, &mut hgamma_flags);
             continue;
         };
-        let truth = if truth_enabled {
-            let particles = read_gen_particles(&event)?;
-            if particles.is_some() {
-                report.truth_available_events += 1;
+        let truth = match truth_strategy {
+            Some(TruthStrategy::TopologyProxy) => {
+                let particles = read_gen_particles(&event)?;
+                if particles.is_some() {
+                    report.truth_available_events += 1;
+                }
+                Some(match_reco_to_truth_proxy(&h, particles.as_deref()))
             }
-            Some(match_reco_to_truth_proxy(&h, particles.as_deref()))
-        } else {
-            None
+            Some(TruthStrategy::HgammaClosure) => {
+                let truth = match_reco_to_hgamma_closure(&h, particles_for_truth.as_deref());
+                if let Some(flags) = hgamma_flags.as_mut() {
+                    flags.has_accepted_candidate = true;
+                    flags.higgs_closed_mass_10 = truth.hgamma_higgs_closed_mass_10;
+                    flags.higgs_closed_mass_15 = truth.hgamma_higgs_closed_mass_15;
+                    flags.higgs_closed_mass_20 = truth.hgamma_higgs_closed_mass_20;
+                }
+                Some(truth)
+            }
+            Some(TruthStrategy::ExplicitChain) | Some(TruthStrategy::None) | None => None,
         };
+        observe_hgamma(&mut report, &mut hgamma_flags);
         report.cutflow.gamma_rho_delta_r += 1;
         report.cutflow.h_candidate += 1;
 
@@ -526,6 +613,12 @@ fn read_gen_particles(
     Ok(Some(particles))
 }
 
+fn observe_hgamma(report: &mut Report, flags: &mut Option<HgammaClosureEventFlags>) {
+    if let Some(flags) = flags.take() {
+        report.hgamma.observe(flags);
+    }
+}
+
 fn print_report(report: &Report) {
     println!("processed_events: {}", report.cutflow.all_events);
     println!(
@@ -553,6 +646,76 @@ fn print_report(report: &Report) {
         report.truth_proxy_matched_0p2,
         report.truth_proxy_matched_0p3
     );
+    if report.hgamma.events_total > 0 {
+        println!(
+            "hgamma_closure_summary: photon_matched_dr_0p1={} photon_matched_dr_0p2={} accepted_candidates={} higgs_closed_mass_10={} higgs_closed_mass_15={} higgs_closed_mass_20={}",
+            report.hgamma.events_with_reco_photon_matched_dr_0p1,
+            report.hgamma.events_with_reco_photon_matched_dr_0p2,
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_accepted_candidate,
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10,
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15,
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20
+        );
+        println!("hgamma_events_total: {}", report.hgamma.events_total);
+        println!(
+            "hgamma_events_with_gen_h: {}",
+            report.hgamma.events_with_gen_h
+        );
+        println!(
+            "hgamma_events_with_gen_hgamma: {}",
+            report.hgamma.events_with_gen_hgamma
+        );
+        println!(
+            "hgamma_events_with_reco_photon_preselection: {}",
+            report.hgamma.events_with_reco_photon_preselection
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1: {}",
+            report.hgamma.events_with_reco_photon_matched_dr_0p1
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p2: {}",
+            report.hgamma.events_with_reco_photon_matched_dr_0p2
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair: {}",
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_any_os_track_pair
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1_and_accepted_candidate: {}",
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_accepted_candidate
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10: {}",
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_10
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15: {}",
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_15
+        );
+        println!(
+            "hgamma_events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20: {}",
+            report
+                .hgamma
+                .events_with_reco_photon_matched_dr_0p1_and_higgs_closed_mass_20
+        );
+    }
     println!("cutflow:");
     println!("  all_events {}", report.cutflow.all_events);
     println!("  leading_photon_pt {}", report.cutflow.leading_photon);
@@ -629,6 +792,7 @@ struct Report {
     truth_proxy_matched_0p1: usize,
     truth_proxy_matched_0p2: usize,
     truth_proxy_matched_0p3: usize,
+    hgamma: HgammaClosureCounters,
     candidates: Vec<CandidateSummary>,
 }
 
@@ -663,16 +827,19 @@ struct CandidateSummary {
 
 struct CandidateCsvWriter {
     writer: BufWriter<File>,
-    truth: bool,
+    truth_strategy: Option<TruthStrategy>,
 }
 
 impl CandidateCsvWriter {
-    fn create(path: &Path, truth: bool) -> Result<Self, Box<dyn Error>> {
+    fn create(path: &Path, truth_strategy: Option<TruthStrategy>) -> Result<Self, Box<dyn Error>> {
         let file = File::create(path)
             .map_err(|err| format!("failed to create candidate CSV {}: {err}", path.display()))?;
         let mut writer = BufWriter::new(file);
-        writeln!(writer, "{}", candidate_csv_header(truth))?;
-        Ok(Self { writer, truth })
+        writeln!(writer, "{}", candidate_csv_header(truth_strategy))?;
+        Ok(Self {
+            writer,
+            truth_strategy,
+        })
     }
 
     fn write_candidate(&mut self, candidate: &CandidateSummary) -> Result<(), Box<dyn Error>> {
@@ -704,57 +871,119 @@ impl CandidateCsvWriter {
             candidate.gamma_rho_delta_r,
             candidate.rho_over_gamma_pt
         )?;
-        if self.truth {
-            let truth = candidate
-                .truth
-                .unwrap_or_else(TruthMatchResult::not_available);
-            let fields = vec![
-                truth.truth_strategy.as_str().to_string(),
-                (truth.truth_available as u8).to_string(),
-                (truth.truth_proxy_matched as u8).to_string(),
-                (truth.truth_proxy_matched_dr_0p1 as u8).to_string(),
-                (truth.truth_proxy_matched_dr_0p2 as u8).to_string(),
-                (truth.truth_proxy_matched_dr_0p3 as u8).to_string(),
-                (truth.truth_photon_anchor_available as u8).to_string(),
-                (truth.gen_photon_from_higgs as u8).to_string(),
-                opt(truth.gen_photon.map(|p| p.pt)),
-                opt(truth.gen_photon.map(|p| p.eta)),
-                opt(truth.gen_photon.map(|p| p.phi)),
-                opt(truth.gen_photon.map(|p| p.mass)),
-                (truth.nearest_gen_pi_plus_available as u8).to_string(),
-                opt(truth.gen_pi_plus.map(|p| p.pt)),
-                opt(truth.gen_pi_plus.map(|p| p.eta)),
-                opt(truth.gen_pi_plus.map(|p| p.phi)),
-                opt(truth.gen_pi_plus.map(|p| p.mass)),
-                (truth.nearest_gen_pi_minus_available as u8).to_string(),
-                opt(truth.gen_pi_minus.map(|p| p.pt)),
-                opt(truth.gen_pi_minus.map(|p| p.eta)),
-                opt(truth.gen_pi_minus.map(|p| p.phi)),
-                opt(truth.gen_pi_minus.map(|p| p.mass)),
-                opt(truth.gen_rho_proxy.map(|p| p.pt)),
-                opt(truth.gen_rho_proxy.map(|p| p.eta)),
-                opt(truth.gen_rho_proxy.map(|p| p.phi)),
-                opt(truth.gen_rho_proxy.map(|p| p.mass)),
-                opt(truth.gen_h_proxy.map(|p| p.pt)),
-                opt(truth.gen_h_proxy.map(|p| p.eta)),
-                opt(truth.gen_h_proxy.map(|p| p.phi)),
-                opt(truth.gen_h_proxy.map(|p| p.mass)),
-                opt(truth.delta_r_reco_photon_gen_photon),
-                opt(truth.delta_r_reco_pi_plus_gen_pi_plus),
-                opt(truth.delta_r_reco_pi_minus_gen_pi_minus),
-                opt(truth.delta_r_reco_rho_gen_rho_proxy),
-                opt(truth.delta_r_reco_h_gen_h_proxy),
-                opt(truth.reco_h_mass_minus_gen_h_proxy_mass),
-                opt(truth.reco_rho_mass_minus_gen_rho_proxy_mass),
-                opt(truth.reco_photon_pt_over_gen_photon_pt),
-                opt(truth.reco_pi_plus_pt_over_gen_pi_plus_pt),
-                opt(truth.reco_pi_minus_pt_over_gen_pi_minus_pt),
-                opt(truth.reco_rho_pt_over_gen_rho_proxy_pt),
-                opt(truth.reco_h_pt_over_gen_h_proxy_pt),
-            ];
-            write!(self.writer, ",{}", fields.join(","))?;
+        match self.truth_strategy {
+            Some(TruthStrategy::TopologyProxy) => {
+                self.write_topology_proxy_truth(candidate)?;
+            }
+            Some(TruthStrategy::HgammaClosure) => {
+                self.write_hgamma_closure_truth(candidate)?;
+            }
+            Some(TruthStrategy::ExplicitChain) | Some(TruthStrategy::None) | None => {}
         }
         writeln!(self.writer)?;
+        Ok(())
+    }
+
+    fn write_topology_proxy_truth(
+        &mut self,
+        candidate: &CandidateSummary,
+    ) -> Result<(), Box<dyn Error>> {
+        let truth = candidate
+            .truth
+            .unwrap_or_else(TruthMatchResult::not_available);
+        let fields = vec![
+            truth.truth_strategy.as_str().to_string(),
+            (truth.truth_available as u8).to_string(),
+            (truth.truth_proxy_matched as u8).to_string(),
+            (truth.truth_proxy_matched_dr_0p1 as u8).to_string(),
+            (truth.truth_proxy_matched_dr_0p2 as u8).to_string(),
+            (truth.truth_proxy_matched_dr_0p3 as u8).to_string(),
+            (truth.truth_photon_anchor_available as u8).to_string(),
+            (truth.gen_photon_from_higgs as u8).to_string(),
+            opt(truth.gen_photon.map(|p| p.pt)),
+            opt(truth.gen_photon.map(|p| p.eta)),
+            opt(truth.gen_photon.map(|p| p.phi)),
+            opt(truth.gen_photon.map(|p| p.mass)),
+            (truth.nearest_gen_pi_plus_available as u8).to_string(),
+            opt(truth.gen_pi_plus.map(|p| p.pt)),
+            opt(truth.gen_pi_plus.map(|p| p.eta)),
+            opt(truth.gen_pi_plus.map(|p| p.phi)),
+            opt(truth.gen_pi_plus.map(|p| p.mass)),
+            (truth.nearest_gen_pi_minus_available as u8).to_string(),
+            opt(truth.gen_pi_minus.map(|p| p.pt)),
+            opt(truth.gen_pi_minus.map(|p| p.eta)),
+            opt(truth.gen_pi_minus.map(|p| p.phi)),
+            opt(truth.gen_pi_minus.map(|p| p.mass)),
+            opt(truth.gen_rho_proxy.map(|p| p.pt)),
+            opt(truth.gen_rho_proxy.map(|p| p.eta)),
+            opt(truth.gen_rho_proxy.map(|p| p.phi)),
+            opt(truth.gen_rho_proxy.map(|p| p.mass)),
+            opt(truth.gen_h_proxy.map(|p| p.pt)),
+            opt(truth.gen_h_proxy.map(|p| p.eta)),
+            opt(truth.gen_h_proxy.map(|p| p.phi)),
+            opt(truth.gen_h_proxy.map(|p| p.mass)),
+            opt(truth.delta_r_reco_photon_gen_photon),
+            opt(truth.delta_r_reco_pi_plus_gen_pi_plus),
+            opt(truth.delta_r_reco_pi_minus_gen_pi_minus),
+            opt(truth.delta_r_reco_rho_gen_rho_proxy),
+            opt(truth.delta_r_reco_h_gen_h_proxy),
+            opt(truth.reco_h_mass_minus_gen_h_proxy_mass),
+            opt(truth.reco_rho_mass_minus_gen_rho_proxy_mass),
+            opt(truth.reco_photon_pt_over_gen_photon_pt),
+            opt(truth.reco_pi_plus_pt_over_gen_pi_plus_pt),
+            opt(truth.reco_pi_minus_pt_over_gen_pi_minus_pt),
+            opt(truth.reco_rho_pt_over_gen_rho_proxy_pt),
+            opt(truth.reco_h_pt_over_gen_h_proxy_pt),
+        ];
+        write!(self.writer, ",{}", fields.join(","))?;
+        Ok(())
+    }
+
+    fn write_hgamma_closure_truth(
+        &mut self,
+        candidate: &CandidateSummary,
+    ) -> Result<(), Box<dyn Error>> {
+        let truth = candidate
+            .truth
+            .unwrap_or_else(TruthMatchResult::not_available);
+        let fields = vec![
+            truth.truth_strategy.as_str().to_string(),
+            (truth.hgamma_closure_available as u8).to_string(),
+            (truth.hgamma_closure_matched as u8).to_string(),
+            (truth.hgamma_gen_h_available as u8).to_string(),
+            (truth.hgamma_gen_gamma_available as u8).to_string(),
+            (truth.hgamma_gen_rho_recoil_available as u8).to_string(),
+            (truth.hgamma_photon_matched_dr_0p1 as u8).to_string(),
+            (truth.hgamma_photon_matched_dr_0p2 as u8).to_string(),
+            (truth.hgamma_higgs_closed_mass_10 as u8).to_string(),
+            (truth.hgamma_higgs_closed_mass_15 as u8).to_string(),
+            (truth.hgamma_higgs_closed_mass_20 as u8).to_string(),
+            (truth.hgamma_higgs_closed_dr_0p3 as u8).to_string(),
+            (truth.hgamma_higgs_closed_dr_0p5 as u8).to_string(),
+            opt(truth.hgamma_gen_h.map(|p| p.pt)),
+            opt(truth.hgamma_gen_h.map(|p| p.eta)),
+            opt(truth.hgamma_gen_h.map(|p| p.phi)),
+            opt(truth.hgamma_gen_h.map(|p| p.mass)),
+            opt(truth.hgamma_gen_gamma.map(|p| p.pt)),
+            opt(truth.hgamma_gen_gamma.map(|p| p.eta)),
+            opt(truth.hgamma_gen_gamma.map(|p| p.phi)),
+            opt(truth.hgamma_gen_gamma.map(|p| p.mass)),
+            opt(truth.hgamma_gen_rho_recoil.map(|p| p.pt)),
+            opt(truth.hgamma_gen_rho_recoil.map(|p| p.eta)),
+            opt(truth.hgamma_gen_rho_recoil.map(|p| p.phi)),
+            opt(truth.hgamma_gen_rho_recoil.map(|p| p.mass)),
+            opt(truth.delta_r_reco_photon_gen_photon),
+            opt(truth.reco_photon_pt_over_gen_photon_pt),
+            opt(truth.reco_photon_eta_minus_gen_photon_eta),
+            opt(truth.reco_photon_phi_minus_gen_photon_phi),
+            opt(truth.delta_r_reco_h_gen_h),
+            opt(truth.reco_h_mass_minus_gen_h_mass),
+            opt(truth.reco_h_pt_over_gen_h_pt),
+            opt(truth.delta_r_reco_rho_gen_rho_recoil),
+            opt(truth.reco_rho_mass_minus_gen_rho_recoil_mass),
+            opt(truth.reco_rho_pt_over_gen_rho_recoil_pt),
+        ];
+        write!(self.writer, ",{}", fields.join(","))?;
         Ok(())
     }
 
@@ -764,12 +993,16 @@ impl CandidateCsvWriter {
     }
 }
 
-fn candidate_csv_header(truth: bool) -> String {
+fn candidate_csv_header(truth_strategy: Option<TruthStrategy>) -> String {
     let base = "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt";
-    if truth {
-        format!("{base},truth_strategy,truth_available,truth_proxy_matched,truth_proxy_matched_dr_0p1,truth_proxy_matched_dr_0p2,truth_proxy_matched_dr_0p3,truth_photon_anchor_available,gen_photon_from_higgs,gen_photon_pt,gen_photon_eta,gen_photon_phi,gen_photon_mass,nearest_gen_pi_plus_available,gen_pi_plus_pt,gen_pi_plus_eta,gen_pi_plus_phi,gen_pi_plus_mass,nearest_gen_pi_minus_available,gen_pi_minus_pt,gen_pi_minus_eta,gen_pi_minus_phi,gen_pi_minus_mass,gen_rho_proxy_pt,gen_rho_proxy_eta,gen_rho_proxy_phi,gen_rho_proxy_mass,gen_h_proxy_pt,gen_h_proxy_eta,gen_h_proxy_phi,gen_h_proxy_mass,delta_r_reco_photon_gen_photon,delta_r_reco_pi_plus_gen_pi_plus,delta_r_reco_pi_minus_gen_pi_minus,delta_r_reco_rho_gen_rho_proxy,delta_r_reco_h_gen_h_proxy,reco_h_mass_minus_gen_h_proxy_mass,reco_rho_mass_minus_gen_rho_proxy_mass,reco_photon_pt_over_gen_photon_pt,reco_pi_plus_pt_over_gen_pi_plus_pt,reco_pi_minus_pt_over_gen_pi_minus_pt,reco_rho_pt_over_gen_rho_proxy_pt,reco_h_pt_over_gen_h_proxy_pt")
-    } else {
-        base.to_string()
+    match truth_strategy {
+        Some(TruthStrategy::TopologyProxy) => {
+            format!("{base},truth_strategy,truth_available,truth_proxy_matched,truth_proxy_matched_dr_0p1,truth_proxy_matched_dr_0p2,truth_proxy_matched_dr_0p3,truth_photon_anchor_available,gen_photon_from_higgs,gen_photon_pt,gen_photon_eta,gen_photon_phi,gen_photon_mass,nearest_gen_pi_plus_available,gen_pi_plus_pt,gen_pi_plus_eta,gen_pi_plus_phi,gen_pi_plus_mass,nearest_gen_pi_minus_available,gen_pi_minus_pt,gen_pi_minus_eta,gen_pi_minus_phi,gen_pi_minus_mass,gen_rho_proxy_pt,gen_rho_proxy_eta,gen_rho_proxy_phi,gen_rho_proxy_mass,gen_h_proxy_pt,gen_h_proxy_eta,gen_h_proxy_phi,gen_h_proxy_mass,delta_r_reco_photon_gen_photon,delta_r_reco_pi_plus_gen_pi_plus,delta_r_reco_pi_minus_gen_pi_minus,delta_r_reco_rho_gen_rho_proxy,delta_r_reco_h_gen_h_proxy,reco_h_mass_minus_gen_h_proxy_mass,reco_rho_mass_minus_gen_rho_proxy_mass,reco_photon_pt_over_gen_photon_pt,reco_pi_plus_pt_over_gen_pi_plus_pt,reco_pi_minus_pt_over_gen_pi_minus_pt,reco_rho_pt_over_gen_rho_proxy_pt,reco_h_pt_over_gen_h_proxy_pt")
+        }
+        Some(TruthStrategy::HgammaClosure) => {
+            format!("{base},truth_strategy,hgamma_closure_available,hgamma_closure_matched,hgamma_gen_h_available,hgamma_gen_gamma_available,hgamma_gen_rho_recoil_available,hgamma_photon_matched_dr_0p1,hgamma_photon_matched_dr_0p2,hgamma_higgs_closed_mass_10,hgamma_higgs_closed_mass_15,hgamma_higgs_closed_mass_20,hgamma_higgs_closed_dr_0p3,hgamma_higgs_closed_dr_0p5,hgamma_gen_h_pt,hgamma_gen_h_eta,hgamma_gen_h_phi,hgamma_gen_h_mass,hgamma_gen_gamma_pt,hgamma_gen_gamma_eta,hgamma_gen_gamma_phi,hgamma_gen_gamma_mass,hgamma_gen_rho_recoil_pt,hgamma_gen_rho_recoil_eta,hgamma_gen_rho_recoil_phi,hgamma_gen_rho_recoil_mass,delta_r_reco_photon_gen_photon,reco_photon_pt_over_gen_photon_pt,reco_photon_eta_minus_gen_photon_eta,reco_photon_phi_minus_gen_photon_phi,delta_r_reco_h_gen_h,reco_h_mass_minus_gen_h_mass,reco_h_pt_over_gen_h_pt,delta_r_reco_rho_gen_rho_recoil,reco_rho_mass_minus_gen_rho_recoil_mass,reco_rho_pt_over_gen_rho_recoil_pt")
+        }
+        Some(TruthStrategy::ExplicitChain) | Some(TruthStrategy::None) | None => base.to_string(),
     }
 }
 
@@ -779,7 +1012,7 @@ fn opt(value: Option<f64>) -> String {
 
 #[derive(Debug, Default)]
 struct CandidateRootWriter {
-    truth_enabled: bool,
+    truth_strategy: Option<TruthStrategy>,
     run: Vec<u32>,
     luminosity_block: Vec<u32>,
     event: Vec<u64>,
@@ -859,12 +1092,43 @@ struct CandidateRootWriter {
     reco_pi_minus_pt_over_gen_pi_minus_pt: Vec<f32>,
     reco_rho_pt_over_gen_rho_proxy_pt: Vec<f32>,
     reco_h_pt_over_gen_h_proxy_pt: Vec<f32>,
+    hgamma_closure_available: Vec<bool>,
+    hgamma_closure_matched: Vec<bool>,
+    hgamma_gen_h_available: Vec<bool>,
+    hgamma_gen_gamma_available: Vec<bool>,
+    hgamma_gen_rho_recoil_available: Vec<bool>,
+    hgamma_photon_matched_dr_0p1: Vec<bool>,
+    hgamma_photon_matched_dr_0p2: Vec<bool>,
+    hgamma_higgs_closed_mass_10: Vec<bool>,
+    hgamma_higgs_closed_mass_15: Vec<bool>,
+    hgamma_higgs_closed_mass_20: Vec<bool>,
+    hgamma_higgs_closed_dr_0p3: Vec<bool>,
+    hgamma_higgs_closed_dr_0p5: Vec<bool>,
+    hgamma_gen_h_pt: Vec<f32>,
+    hgamma_gen_h_eta: Vec<f32>,
+    hgamma_gen_h_phi: Vec<f32>,
+    hgamma_gen_h_mass: Vec<f32>,
+    hgamma_gen_gamma_pt: Vec<f32>,
+    hgamma_gen_gamma_eta: Vec<f32>,
+    hgamma_gen_gamma_phi: Vec<f32>,
+    hgamma_gen_gamma_mass: Vec<f32>,
+    hgamma_gen_rho_recoil_pt: Vec<f32>,
+    hgamma_gen_rho_recoil_eta: Vec<f32>,
+    hgamma_gen_rho_recoil_phi: Vec<f32>,
+    hgamma_gen_rho_recoil_mass: Vec<f32>,
+    reco_photon_eta_minus_gen_photon_eta: Vec<f32>,
+    reco_photon_phi_minus_gen_photon_phi: Vec<f32>,
+    delta_r_reco_h_gen_h: Vec<f32>,
+    reco_h_pt_over_gen_h_pt: Vec<f32>,
+    delta_r_reco_rho_gen_rho_recoil: Vec<f32>,
+    reco_rho_mass_minus_gen_rho_recoil_mass: Vec<f32>,
+    reco_rho_pt_over_gen_rho_recoil_pt: Vec<f32>,
 }
 
 impl CandidateRootWriter {
-    fn new(truth_enabled: bool) -> Self {
+    fn new(truth_strategy: Option<TruthStrategy>) -> Self {
         Self {
-            truth_enabled,
+            truth_strategy,
             ..Self::default()
         }
     }
@@ -896,7 +1160,7 @@ impl CandidateRootWriter {
             .push(candidate.gamma_rho_delta_r as f32);
         self.rho_pt_over_photon_pt
             .push(candidate.rho_over_gamma_pt as f32);
-        if self.truth_enabled {
+        if self.truth_strategy.is_some() {
             let truth = candidate
                 .truth
                 .unwrap_or_else(TruthMatchResult::not_available);
@@ -999,6 +1263,67 @@ impl CandidateRootWriter {
                 .push(opt_f32(truth.reco_rho_pt_over_gen_rho_proxy_pt));
             self.reco_h_pt_over_gen_h_proxy_pt
                 .push(opt_f32(truth.reco_h_pt_over_gen_h_proxy_pt));
+            if matches!(self.truth_strategy, Some(TruthStrategy::HgammaClosure)) {
+                self.hgamma_closure_available
+                    .push(truth.hgamma_closure_available);
+                self.hgamma_closure_matched
+                    .push(truth.hgamma_closure_matched);
+                self.hgamma_gen_h_available
+                    .push(truth.hgamma_gen_h_available);
+                self.hgamma_gen_gamma_available
+                    .push(truth.hgamma_gen_gamma_available);
+                self.hgamma_gen_rho_recoil_available
+                    .push(truth.hgamma_gen_rho_recoil_available);
+                self.hgamma_photon_matched_dr_0p1
+                    .push(truth.hgamma_photon_matched_dr_0p1);
+                self.hgamma_photon_matched_dr_0p2
+                    .push(truth.hgamma_photon_matched_dr_0p2);
+                self.hgamma_higgs_closed_mass_10
+                    .push(truth.hgamma_higgs_closed_mass_10);
+                self.hgamma_higgs_closed_mass_15
+                    .push(truth.hgamma_higgs_closed_mass_15);
+                self.hgamma_higgs_closed_mass_20
+                    .push(truth.hgamma_higgs_closed_mass_20);
+                self.hgamma_higgs_closed_dr_0p3
+                    .push(truth.hgamma_higgs_closed_dr_0p3);
+                self.hgamma_higgs_closed_dr_0p5
+                    .push(truth.hgamma_higgs_closed_dr_0p5);
+                push_particle(
+                    &mut self.hgamma_gen_h_pt,
+                    &mut self.hgamma_gen_h_eta,
+                    &mut self.hgamma_gen_h_phi,
+                    &mut self.hgamma_gen_h_mass,
+                    truth.hgamma_gen_h,
+                );
+                push_particle(
+                    &mut self.hgamma_gen_gamma_pt,
+                    &mut self.hgamma_gen_gamma_eta,
+                    &mut self.hgamma_gen_gamma_phi,
+                    &mut self.hgamma_gen_gamma_mass,
+                    truth.hgamma_gen_gamma,
+                );
+                push_particle(
+                    &mut self.hgamma_gen_rho_recoil_pt,
+                    &mut self.hgamma_gen_rho_recoil_eta,
+                    &mut self.hgamma_gen_rho_recoil_phi,
+                    &mut self.hgamma_gen_rho_recoil_mass,
+                    truth.hgamma_gen_rho_recoil,
+                );
+                self.reco_photon_eta_minus_gen_photon_eta
+                    .push(opt_f32(truth.reco_photon_eta_minus_gen_photon_eta));
+                self.reco_photon_phi_minus_gen_photon_phi
+                    .push(opt_f32(truth.reco_photon_phi_minus_gen_photon_phi));
+                self.delta_r_reco_h_gen_h
+                    .push(opt_f32(truth.delta_r_reco_h_gen_h));
+                self.reco_h_pt_over_gen_h_pt
+                    .push(opt_f32(truth.reco_h_pt_over_gen_h_pt));
+                self.delta_r_reco_rho_gen_rho_recoil
+                    .push(opt_f32(truth.delta_r_reco_rho_gen_rho_recoil));
+                self.reco_rho_mass_minus_gen_rho_recoil_mass
+                    .push(opt_f32(truth.reco_rho_mass_minus_gen_rho_recoil_mass));
+                self.reco_rho_pt_over_gen_rho_recoil_pt
+                    .push(opt_f32(truth.reco_rho_pt_over_gen_rho_recoil_pt));
+            }
         }
     }
 
@@ -1037,7 +1362,7 @@ impl CandidateRootWriter {
                 std::mem::take(&mut self.rho_pt_over_photon_pt),
             ),
         ];
-        if self.truth_enabled {
+        if self.truth_strategy.is_some() {
             branches.extend([
                 OutputBranch::bool("truth_available", std::mem::take(&mut self.truth_available)),
                 OutputBranch::bool(
@@ -1201,6 +1526,131 @@ impl CandidateRootWriter {
                     std::mem::take(&mut self.reco_h_pt_over_gen_h_proxy_pt),
                 ),
             ]);
+            if matches!(self.truth_strategy, Some(TruthStrategy::HgammaClosure)) {
+                branches.extend([
+                    OutputBranch::bool(
+                        "hgamma_closure_available",
+                        std::mem::take(&mut self.hgamma_closure_available),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_closure_matched",
+                        std::mem::take(&mut self.hgamma_closure_matched),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_gen_h_available",
+                        std::mem::take(&mut self.hgamma_gen_h_available),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_gen_gamma_available",
+                        std::mem::take(&mut self.hgamma_gen_gamma_available),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_gen_rho_recoil_available",
+                        std::mem::take(&mut self.hgamma_gen_rho_recoil_available),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_photon_matched_dr_0p1",
+                        std::mem::take(&mut self.hgamma_photon_matched_dr_0p1),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_photon_matched_dr_0p2",
+                        std::mem::take(&mut self.hgamma_photon_matched_dr_0p2),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_higgs_closed_mass_10",
+                        std::mem::take(&mut self.hgamma_higgs_closed_mass_10),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_higgs_closed_mass_15",
+                        std::mem::take(&mut self.hgamma_higgs_closed_mass_15),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_higgs_closed_mass_20",
+                        std::mem::take(&mut self.hgamma_higgs_closed_mass_20),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_higgs_closed_dr_0p3",
+                        std::mem::take(&mut self.hgamma_higgs_closed_dr_0p3),
+                    ),
+                    OutputBranch::bool(
+                        "hgamma_higgs_closed_dr_0p5",
+                        std::mem::take(&mut self.hgamma_higgs_closed_dr_0p5),
+                    ),
+                    OutputBranch::f32("hgamma_gen_h_pt", std::mem::take(&mut self.hgamma_gen_h_pt)),
+                    OutputBranch::f32(
+                        "hgamma_gen_h_eta",
+                        std::mem::take(&mut self.hgamma_gen_h_eta),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_h_phi",
+                        std::mem::take(&mut self.hgamma_gen_h_phi),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_h_mass",
+                        std::mem::take(&mut self.hgamma_gen_h_mass),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_gamma_pt",
+                        std::mem::take(&mut self.hgamma_gen_gamma_pt),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_gamma_eta",
+                        std::mem::take(&mut self.hgamma_gen_gamma_eta),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_gamma_phi",
+                        std::mem::take(&mut self.hgamma_gen_gamma_phi),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_gamma_mass",
+                        std::mem::take(&mut self.hgamma_gen_gamma_mass),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_rho_recoil_pt",
+                        std::mem::take(&mut self.hgamma_gen_rho_recoil_pt),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_rho_recoil_eta",
+                        std::mem::take(&mut self.hgamma_gen_rho_recoil_eta),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_rho_recoil_phi",
+                        std::mem::take(&mut self.hgamma_gen_rho_recoil_phi),
+                    ),
+                    OutputBranch::f32(
+                        "hgamma_gen_rho_recoil_mass",
+                        std::mem::take(&mut self.hgamma_gen_rho_recoil_mass),
+                    ),
+                    OutputBranch::f32(
+                        "reco_photon_eta_minus_gen_photon_eta",
+                        std::mem::take(&mut self.reco_photon_eta_minus_gen_photon_eta),
+                    ),
+                    OutputBranch::f32(
+                        "reco_photon_phi_minus_gen_photon_phi",
+                        std::mem::take(&mut self.reco_photon_phi_minus_gen_photon_phi),
+                    ),
+                    OutputBranch::f32(
+                        "delta_r_reco_h_gen_h",
+                        std::mem::take(&mut self.delta_r_reco_h_gen_h),
+                    ),
+                    OutputBranch::f32(
+                        "reco_h_pt_over_gen_h_pt",
+                        std::mem::take(&mut self.reco_h_pt_over_gen_h_pt),
+                    ),
+                    OutputBranch::f32(
+                        "delta_r_reco_rho_gen_rho_recoil",
+                        std::mem::take(&mut self.delta_r_reco_rho_gen_rho_recoil),
+                    ),
+                    OutputBranch::f32(
+                        "reco_rho_mass_minus_gen_rho_recoil_mass",
+                        std::mem::take(&mut self.reco_rho_mass_minus_gen_rho_recoil_mass),
+                    ),
+                    OutputBranch::f32(
+                        "reco_rho_pt_over_gen_rho_recoil_pt",
+                        std::mem::take(&mut self.reco_rho_pt_over_gen_rho_recoil_pt),
+                    ),
+                ]);
+            }
         }
         write_events(path, &branches)?;
         Ok(())

@@ -114,6 +114,58 @@ TRUTH_PROXY_EXPECTED_PLOTS = (
     *tuple(f"{column}.png" for column in TRUTH_PROXY_PLOT_COLUMNS),
     *tuple(filename for _, _, filename in TRUTH_PROXY_PLOT_2D_COLUMNS),
 )
+HGAMMA_CLOSURE_REQUIRED_COLUMNS = (
+    "truth_strategy",
+    "hgamma_closure_available",
+    "hgamma_closure_matched",
+    "hgamma_photon_matched_dr_0p1",
+    "hgamma_higgs_closed_mass_15",
+)
+HGAMMA_CLOSURE_SUMMARY_COLUMNS = (
+    "delta_r_reco_photon_gen_photon",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_photon_eta_minus_gen_photon_eta",
+    "reco_photon_phi_minus_gen_photon_phi",
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_h_pt_over_gen_h_pt",
+    "delta_r_reco_h_gen_h",
+    "hgamma_gen_rho_recoil_mass",
+    "reco_rho_mass_minus_gen_rho_recoil_mass",
+    "reco_rho_pt_over_gen_rho_recoil_pt",
+    "delta_r_reco_rho_gen_rho_recoil",
+)
+HGAMMA_CLOSURE_PLOT_COLUMNS = (
+    "delta_r_reco_photon_gen_photon",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_h_pt_over_gen_h_pt",
+    "delta_r_reco_h_gen_h",
+    "hgamma_gen_rho_recoil_mass",
+    "reco_rho_mass_minus_gen_rho_recoil_mass",
+    "reco_rho_pt_over_gen_rho_recoil_pt",
+    "delta_r_reco_rho_gen_rho_recoil",
+)
+HGAMMA_CLOSURE_PLOT_2D_COLUMNS = (
+    ("hgamma_gen_h_mass", "h_mass", "hgamma_reco_h_mass_vs_gen_h_mass.png"),
+    (
+        "hgamma_gen_rho_recoil_mass",
+        "rho_mass",
+        "hgamma_reco_rho_mass_vs_gen_rho_recoil_mass.png",
+    ),
+    ("hgamma_gen_gamma_pt", "photon_pt", "hgamma_reco_photon_pt_vs_gen_photon_pt.png"),
+    ("hgamma_gen_rho_recoil_pt", "rho_pt", "hgamma_reco_rho_pt_vs_gen_rho_recoil_pt.png"),
+    ("hgamma_gen_h_pt", "h_pt", "hgamma_reco_h_pt_vs_gen_h_pt.png"),
+)
+HGAMMA_CLOSURE_EXPECTED_PLOTS = (
+    "hgamma_higgs_closure_thresholds.png",
+    "hgamma_photon_match_dr.png",
+    *tuple(
+        f"{column}.png" if column.startswith("hgamma_") else f"hgamma_{column}.png"
+        for column in HGAMMA_CLOSURE_PLOT_COLUMNS
+        if column != "delta_r_reco_photon_gen_photon"
+    ),
+    *tuple(filename for _, _, filename in HGAMMA_CLOSURE_PLOT_2D_COLUMNS),
+)
 HIGGS_MASS_WINDOW = (100.0, 150.0)
 AXIS_LABELS = {
     "h_mass": "m(H candidate) [GeV]",
@@ -151,6 +203,18 @@ AXIS_LABELS = {
     "gen_rho_mass": "mrho(gen) [GeV]",
     "gen_photon_pt": "Gen photon pT [GeV]",
     "gen_rho_pt": "Gen rho pT [GeV]",
+    "reco_photon_eta_minus_gen_photon_eta": "eta(reco gamma) - eta(gen gamma)",
+    "reco_photon_phi_minus_gen_photon_phi": "phi(reco gamma) - phi(gen gamma)",
+    "delta_r_reco_h_gen_h": "DeltaR(reco H, gen H)",
+    "reco_h_pt_over_gen_h_pt": "reco H pT / gen H pT",
+    "hgamma_gen_rho_recoil_mass": "m(H gen - gamma gen) [GeV]",
+    "delta_r_reco_rho_gen_rho_recoil": "DeltaR(reco rho, gen H-gamma recoil)",
+    "reco_rho_mass_minus_gen_rho_recoil_mass": "mrho(reco) - m(H-gamma recoil) [GeV]",
+    "reco_rho_pt_over_gen_rho_recoil_pt": "reco rho pT / gen H-gamma recoil pT",
+    "hgamma_gen_h_mass": "mH(gen) [GeV]",
+    "hgamma_gen_gamma_pt": "Gen gamma pT [GeV]",
+    "hgamma_gen_rho_recoil_pt": "Gen H-gamma recoil pT [GeV]",
+    "hgamma_gen_h_pt": "Gen H pT [GeV]",
 }
 
 
@@ -286,6 +350,10 @@ def has_truth_proxy_columns(fieldnames: list[str]) -> bool:
     return all(column in fieldnames for column in TRUTH_PROXY_REQUIRED_COLUMNS)
 
 
+def has_hgamma_closure_columns(fieldnames: list[str]) -> bool:
+    return all(column in fieldnames for column in HGAMMA_CLOSURE_REQUIRED_COLUMNS)
+
+
 def truth_count(rows: list[dict[str, str]], column: str, value: str) -> int:
     return sum(1 for row in rows if row.get(column, "").lower() == value)
 
@@ -402,6 +470,31 @@ def build_summary(
             lines.append(f"truth_proxy_plot_expected: {filename}")
     else:
         lines.append("truth_proxy_columns: absent")
+    if has_hgamma_closure_columns(fieldnames):
+        lines.append("hgamma_closure_columns: present")
+        lines.append(
+            f"hgamma_closure_available_count: {truth_count(rows, 'hgamma_closure_available', '1')}"
+        )
+        lines.append(
+            f"hgamma_closure_matched_count: {truth_count(rows, 'hgamma_closure_matched', '1')}"
+        )
+        for column in (
+            "hgamma_photon_matched_dr_0p1",
+            "hgamma_photon_matched_dr_0p2",
+            "hgamma_higgs_closed_mass_10",
+            "hgamma_higgs_closed_mass_15",
+            "hgamma_higgs_closed_mass_20",
+            "hgamma_higgs_closed_dr_0p3",
+            "hgamma_higgs_closed_dr_0p5",
+        ):
+            lines.append(f"{column}_count: {truth_count(rows, column, '1')}")
+        for column in HGAMMA_CLOSURE_SUMMARY_COLUMNS:
+            if column in fieldnames:
+                lines.append(stats_line(column, optional_numeric_values(rows, column)))
+        for filename in HGAMMA_CLOSURE_EXPECTED_PLOTS:
+            lines.append(f"hgamma_plot_expected: {filename}")
+    else:
+        lines.append("hgamma_closure_columns: absent")
     lines.append(f"plots: {plot_status}")
     return "\n".join(lines) + "\n"
 
@@ -469,6 +562,7 @@ def plot_histograms(
         written.append(output)
     written.extend(plot_truth(rows, outdir, hep, plt, np))
     written.extend(plot_truth_proxy(rows, outdir, hep, plt, np))
+    written.extend(plot_hgamma_closure(rows, outdir, hep, plt, np))
     return written
 
 
@@ -646,6 +740,88 @@ def plot_truth_proxy(rows, outdir, hep, plt, np) -> list[Path]:
         if not pairs:
             continue
         x_values, y_values = zip(*pairs)
+        figure, axis = plt.subplots(figsize=(6.0, 5.2), constrained_layout=True)
+        axis.hist2d(x_values, y_values, bins=50)
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(x_column))
+        axis.set_ylabel(axis_label(y_column))
+        output = outdir / filename
+        figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
+        plt.close(figure)
+        written.append(output)
+    return written
+
+
+def plot_hgamma_closure(rows, outdir, hep, plt, np) -> list[Path]:
+    if not rows or not has_hgamma_closure_columns(list(rows[0].keys())):
+        return []
+    written = []
+    counts = [
+        truth_count(rows, "hgamma_photon_matched_dr_0p1", "1"),
+        truth_count(rows, "hgamma_higgs_closed_mass_10", "1"),
+        truth_count(rows, "hgamma_higgs_closed_mass_15", "1"),
+        truth_count(rows, "hgamma_higgs_closed_mass_20", "1"),
+        truth_count(rows, "hgamma_closure_matched", "1"),
+    ]
+    labels = ["gamma dR<0.1", "|dmH|<10", "|dmH|<15", "|dmH|<20", "matched"]
+    figure, axis = plt.subplots(figsize=(6.4, 4.2), constrained_layout=True)
+    axis.bar(labels, counts, color="#2f6fbb")
+    axis.tick_params(axis="x", labelrotation=25)
+    axis.set_ylabel("Candidates")
+    axis.set_title("Photon-anchored Higgs closure", fontsize=11)
+    output = outdir / "hgamma_higgs_closure_thresholds.png"
+    figure.savefig(output)
+    figure.savefig(output.with_suffix(".pdf"))
+    plt.close(figure)
+    written.append(output)
+
+    fieldnames = list(rows[0].keys())
+    for column in HGAMMA_CLOSURE_PLOT_COLUMNS:
+        if column not in fieldnames:
+            continue
+        values = optional_numeric_values(rows, column)
+        if not values:
+            continue
+        figure, axis = plt.subplots(figsize=(6.0, 5.0), constrained_layout=True)
+        axis.hist(values, bins=80, histtype="step", linewidth=1.5)
+        if column == "delta_r_reco_photon_gen_photon":
+            for threshold in (0.1, 0.2):
+                axis.axvline(threshold, color="#777777", linestyle="--", linewidth=0.8)
+            output = outdir / "hgamma_photon_match_dr.png"
+        elif column in {"reco_photon_pt_over_gen_photon_pt", "reco_h_pt_over_gen_h_pt", "reco_rho_pt_over_gen_rho_recoil_pt"}:
+            axis.axvline(1.0, color="#777777", linestyle="--", linewidth=0.8)
+            output = outdir / f"hgamma_{column}.png"
+        elif column == "reco_h_mass_minus_gen_h_mass":
+            for threshold in (-20.0, -15.0, -10.0, 10.0, 15.0, 20.0):
+                axis.axvline(threshold, color="#777777", linestyle="--", linewidth=0.6)
+            output = outdir / f"hgamma_{column}.png"
+        elif column.startswith("hgamma_"):
+            output = outdir / f"{column}.png"
+        else:
+            output = outdir / f"hgamma_{column}.png"
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(column))
+        axis.set_ylabel("Candidates / bin")
+        figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
+        plt.close(figure)
+        written.append(output)
+
+    for x_column, y_column, filename in HGAMMA_CLOSURE_PLOT_2D_COLUMNS:
+        if x_column not in fieldnames or y_column not in fieldnames:
+            continue
+        pairs = []
+        for row in rows:
+            x_raw = row.get(x_column, "")
+            y_raw = row.get(y_column, "")
+            if x_raw == "" or y_raw == "":
+                continue
+            pairs.append((float(x_raw), float(y_raw)))
+        if not pairs:
+            continue
+        x_values = [pair[0] for pair in pairs]
+        y_values = [pair[1] for pair in pairs]
         figure, axis = plt.subplots(figsize=(6.0, 5.2), constrained_layout=True)
         axis.hist2d(x_values, y_values, bins=50)
         axis.set_title("HToRhoGamma signal", fontsize=11)
