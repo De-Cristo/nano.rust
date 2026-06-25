@@ -506,6 +506,82 @@ tight/constrained layout, optional CMS-style labels through `mplhep`, and both
 PNG and PDF output. If matplotlib is unavailable, summaries and reports are
 still written.
 
+## GenPart Topology Survey
+
+Stage 14B adds a diagnostic survey for understanding how the signal MC actually
+stores generator particles before changing the truth finder. It does not change
+candidate reconstruction, cuts, CSV production, ROOT writing, or plotting.
+
+Run a small local survey:
+
+```bash
+python scripts/survey_hrhogamma_genpart_topology.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --outdir /tmp/scouting_hrhogamma_genpart_survey_small \
+  --max-files 2 \
+  --max-events-per-file 1000
+```
+
+Run the full local signal directory:
+
+```bash
+python scripts/survey_hrhogamma_genpart_topology.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --outdir /tmp/scouting_hrhogamma_genpart_survey_full \
+  --all-files
+```
+
+The runner builds and calls:
+
+```bash
+target/debug/examples/scouting_h_rho_gamma_genpart_survey \
+  input.root [max-events] \
+  --out-json per_file/file_000001.summary.json \
+  --out-text per_file/file_000001.summary.txt \
+  --out-examples per_file/file_000001.examples.txt
+```
+
+Useful switches:
+
+- `--local-glob "*.root"`: choose the local file pattern.
+- `--max-files N`: survey the first `N` sorted files.
+- `--all-files`: survey every matched file.
+- `--max-events-per-file N`: cap each per-file survey.
+- `--examples N`: keep at most `N` example events per category.
+- `--release`: run the release example binary.
+- `--no-build`: require an existing example binary.
+- `--skip-existing`: reuse existing per-file JSON/stdout outputs.
+- `--dry-run`: write the selected-file plan without reading ROOT files.
+
+The output layout is:
+
+```text
+/tmp/scouting_hrhogamma_genpart_survey_full/
+genpart_topology_summary.txt
+genpart_topology_summary.json
+per_file/
+file_000001.summary.json
+file_000001.summary.txt
+file_000001.examples.txt
+file_000001.stdout.txt
+```
+
+The survey inspects standard NanoAOD GenPart branches:
+`nGenPart`, `GenPart_pdgId`, `GenPart_genPartIdxMother`, `GenPart_status`,
+`GenPart_statusFlags`, `GenPart_pt`, `GenPart_eta`, `GenPart_phi`, and
+`GenPart_mass`. It reports file/event counts, signed and absolute pdgId
+frequency tables, status and statusFlags tables for key particles, mother to
+daughter relation counts, ancestry checks, and bounded examples for events with
+Higgs, rho0, gamma plus pions without rho0, and events where the simple Stage
+14 truth finder would say `not_found`.
+
+The small two-file survey over 1000 events per file found `25` and `22` in all
+events, a small number of `113` entries, and some charged pions, but no explicit
+`113 -> pi+ pi-` relation and no Higgs/rho ancestry for the charged pions. It
+therefore recommends treating the current ancestry as insufficient and using a
+nearest final-state photon/pi+pi- matching diagnostic, plus generator-level
+invariant-mass checks, for the next truth-validation stage.
+
 ## Known Limitations
 
 - This runs on NanoAODv15-like signal MC with ordinary `Photon_*` and
@@ -513,6 +589,8 @@ still written.
   reduced HLT scouting object content.
 - Truth matching is a preliminary GenPart sanity check, not an efficiency or
   resolution model.
+- The GenPart topology survey is diagnostic; it does not yet implement the
+  Stage 15 truth-matching strategy recommended by the survey output.
 - There are no jet, L1, trigger-efficiency, isolation, or category studies.
 - The ROOT output is a candidate skim, not a full event skim or analysis ntuple.
 - The Python plots are signal-sample sanity plots over the candidate CSV, not a

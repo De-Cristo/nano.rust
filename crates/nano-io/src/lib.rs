@@ -15,6 +15,7 @@ use nano_core::{BranchSchema, Event};
 pub use nano_rootio::HttpSourceOptions;
 
 pub mod datacard;
+pub mod genpart_survey;
 pub mod samples;
 pub mod scouting_hrhogamma;
 
