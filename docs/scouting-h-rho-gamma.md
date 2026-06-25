@@ -334,6 +334,18 @@ python scripts/run_scouting_hrhogamma_signal.py \
   --max-events-per-file 100
 ```
 
+Run every ROOT file in a local signal directory with optional GenPart truth
+validation:
+
+```bash
+python scripts/run_scouting_hrhogamma_signal.py \
+  --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
+  --config configs/scouting/h_rho_gamma.toml \
+  --outdir /tmp/scouting_hrhogamma_signal_stage14_full_local \
+  --all-files \
+  --truth
+```
+
 The safe default is to process at most 5 files when `--max-files` is omitted.
 Use `--all-files` only when intentionally running the full resolved sample:
 
@@ -372,6 +384,8 @@ Useful switches:
 - `--manifest path/to/manifest.json`: reuse an existing nano-das manifest.
 - `--resolve-das`: call `cargo run -p nano-cli -- dataset resolve`.
 - `--local-files file1.root file2.root`: run directly over local files.
+- `--local-dir path`: discover local files in sorted order from a directory.
+- `--local-glob "*.root"`: choose the pattern used by `--local-dir`.
 - `--xrootd`: use manifest global XRootD URLs instead of local paths/LFNs.
 - `--download-remote`: copy `root://` or `/store/` inputs into the local cache
   before running the Rust reader.
@@ -392,6 +406,8 @@ Useful switches:
   plus `physics_summary.md` without rerunning ROOT processing.
 - `--report-title "..."`: set the Markdown report title.
 - `--no-physics-report`: skip `physics_summary.md` generation.
+- `--truth`: request optional GenPart truth validation and truth-augmented
+  candidate output.
 - `--no-root`: skip combined ROOT skim writing.
 - `--no-csv`: skip candidate CSV output and plotting.
 - `--dry-run`: resolve/select files and write the production summary only.
@@ -440,6 +456,12 @@ h_mass_vs_rho_mass.png
 photon_pt_vs_h_mass.png
 rho_pt_vs_h_mass.png
 delta_r_gamma_rho_vs_h_mass.png
+truth_matched_fraction.png
+h_mass_truth_matched_vs_unmatched.png
+reco_h_mass_minus_gen_h_mass.png
+reco_h_mass_minus_gen_h_mass.pdf
+reco_h_mass_vs_gen_h_mass.png
+reco_h_mass_vs_gen_h_mass.pdf
 ```
 
 `production_summary.txt` records the dataset, manifest path, DAS resolver mode,
@@ -462,12 +484,35 @@ interpretation notes, and current limitations. If `matplotlib` is unavailable,
 the report is still written and the plot section states that PNG generation was
 skipped.
 
+When `--truth` is enabled, the Rust example attempts to read standard NanoAOD
+GenPart branches: `nGenPart`, `GenPart_pdgId`,
+`GenPart_genPartIdxMother`, `GenPart_status`, `GenPart_statusFlags`,
+`GenPart_pt`, `GenPart_eta`, `GenPart_phi`, and `GenPart_mass`. The truth
+topology search first looks for `H(25) -> rho0(113) + gamma(22)` with
+`rho0 -> pi+ pi-`, then falls back to Higgs-descendant `gamma`, `pi+`, and
+`pi-` without an explicit rho. Candidate matching uses
+`DeltaR(reco gamma, gen gamma) < 0.1`,
+`DeltaR(reco pi+, gen pi+) < 0.1`, and
+`DeltaR(reco pi-, gen pi-) < 0.1`. Truth mode appends GenPart kinematics,
+matching DeltaR values, reco-gen response variables, `truth_available`,
+`truth_topology`, and `truth_matched` to the CSV. The combined ROOT skim stores
+the same numeric quantities and encodes topology as `truth_topology_code`:
+`0=not_available`, `1=explicit_rho`, `2=fallback_no_explicit_rho`,
+`3=not_found`.
+
+Plots use a compact HEP-style matplotlib configuration when plotting is
+available: 6-inch-scale figures, 10-12 pt fonts, step histograms, axis units,
+tight/constrained layout, optional CMS-style labels through `mplhep`, and both
+PNG and PDF output. If matplotlib is unavailable, summaries and reports are
+still written.
+
 ## Known Limitations
 
 - This runs on NanoAODv15-like signal MC with ordinary `Photon_*` and
   `PFCand_*` collections plus scouting trigger bits; it is not confirmed to be
   reduced HLT scouting object content.
-- There is no truth matching or generator-level validation.
+- Truth matching is a preliminary GenPart sanity check, not an efficiency or
+  resolution model.
 - There are no jet, L1, trigger-efficiency, isolation, or category studies.
 - The ROOT output is a candidate skim, not a full event skim or analysis ntuple.
 - The Python plots are signal-sample sanity plots over the candidate CSV, not a

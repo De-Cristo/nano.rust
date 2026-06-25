@@ -44,6 +44,32 @@ EXPECTED_PLOTS = (
     "rho_pt_vs_h_mass.png",
     "delta_r_gamma_rho_vs_h_mass.png",
 )
+TRUTH_REQUIRED_COLUMNS = ("truth_available", "truth_topology", "truth_matched")
+TRUTH_SUMMARY_COLUMNS = (
+    "delta_r_reco_photon_gen_photon",
+    "delta_r_reco_pi_plus_gen_pi_plus",
+    "delta_r_reco_pi_minus_gen_pi_minus",
+    "delta_r_reco_rho_gen_rho",
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_rho_mass_minus_gen_rho_mass",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_rho_pt_over_gen_rho_pt",
+)
+TRUTH_PLOTS = (
+    "truth_matched_fraction.png",
+    "h_mass_truth_matched_vs_unmatched.png",
+    "reco_h_mass_minus_gen_h_mass.png",
+    "reco_rho_mass_minus_gen_rho_mass.png",
+    "delta_r_reco_photon_gen_photon.png",
+    "delta_r_reco_pi_plus_gen_pi_plus.png",
+    "delta_r_reco_pi_minus_gen_pi_minus.png",
+    "reco_photon_pt_over_gen_photon_pt.png",
+    "reco_rho_pt_over_gen_rho_pt.png",
+    "reco_h_mass_vs_gen_h_mass.png",
+    "reco_rho_mass_vs_gen_rho_mass.png",
+    "reco_photon_pt_vs_gen_photon_pt.png",
+    "reco_rho_pt_vs_gen_rho_pt.png",
+)
 DEFAULT_RHO_WINDOW = (0.3, 1.2)
 
 
@@ -89,6 +115,19 @@ def numeric_values(rows: list[dict[str, str]], column: str) -> list[float]:
     values = []
     for index, row in enumerate(rows, start=2):
         raw = row.get(column, "")
+        try:
+            values.append(float(raw))
+        except ValueError as exc:
+            raise ValueError(f"row {index}: column {column} is not numeric: {raw!r}") from exc
+    return values
+
+
+def optional_numeric_values(rows: list[dict[str, str]], column: str) -> list[float]:
+    values = []
+    for index, row in enumerate(rows, start=2):
+        raw = row.get(column, "")
+        if raw == "":
+            continue
         try:
             values.append(float(raw))
         except ValueError as exc:
@@ -210,6 +249,78 @@ def plot_index(outdir: Path, plots_dir: Path, plots_status: str) -> tuple[list[s
     return produced, missing, reason
 
 
+def has_truth_columns(fieldnames: list[str]) -> bool:
+    return all(column in fieldnames for column in TRUTH_REQUIRED_COLUMNS)
+
+
+def count_truth(rows: list[dict[str, str]], column: str, value: str) -> int:
+    return sum(1 for row in rows if row.get(column, "") == value)
+
+
+def truth_topology_counts(rows: list[dict[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        topology = row.get("truth_topology", "")
+        if topology:
+            counts[topology] = counts.get(topology, 0) + 1
+    return counts
+
+
+def truth_section(
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+    outdir: Path,
+    plots_dir: Path,
+) -> list[str]:
+    lines = ["## Truth Validation", ""]
+    if not has_truth_columns(fieldnames):
+        lines.append("Truth validation was not requested or truth columns are absent.")
+        lines.append("")
+        return lines
+
+    total = len(rows)
+    available = count_truth(rows, "truth_available", "1")
+    matched = count_truth(rows, "truth_matched", "1")
+    lines.extend(
+        [
+            f"- truth available candidates: `{available}` / `{total}` (`{fraction(available, total)}`)",
+            f"- truth matched candidates: `{matched}` / `{total}` (`{fraction(matched, total)}`)",
+            "- matching threshold: `dR(photon), dR(pi+), dR(pi-) < 0.1`",
+            "- topology breakdown:",
+        ]
+    )
+    for topology, count in sorted(truth_topology_counts(rows).items()):
+        lines.append(f"  - {topology}: `{count}`")
+    lines.extend(["", "### Truth Matching Variable Summaries", ""])
+    summary_columns = [column for column in TRUTH_SUMMARY_COLUMNS if column in fieldnames]
+    if summary_columns:
+        lines.extend(
+            [
+                "| variable | count | min | mean | median | p16 | p50 | p84 | max |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for column in summary_columns:
+            summary = summarize(optional_numeric_values(rows, column))
+            if summary is None:
+                lines.append(f"| {column} | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+            else:
+                lines.append(
+                    f"| {column} | {summary['count']} | {summary['min']:.6f} | "
+                    f"{summary['mean']:.6f} | {summary['median']:.6f} | "
+                    f"{summary['p16']:.6f} | {summary['p50']:.6f} | "
+                    f"{summary['p84']:.6f} | {summary['max']:.6f} |"
+                )
+    lines.extend(["", "### Truth Plot Index", ""])
+    produced = [relative_link(outdir, plots_dir / name) for name in TRUTH_PLOTS if (plots_dir / name).exists()]
+    if produced:
+        lines.extend(f"- [{Path(path).stem}]({path})" for path in produced)
+    else:
+        lines.append("- No truth PNG plots are present.")
+    lines.append("")
+    return lines
+
+
 def markdown_table(statistics_by_column: dict[str, dict[str, float | int] | None]) -> list[str]:
     lines = [
         "| variable | count | min | mean | median | p16 | p50 | p84 | max |",
@@ -299,6 +410,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
         ),
         f"- rho mass window source: `{rho_window_source}`",
         "",
+        *truth_section(rows, fieldnames, outdir, plots_dir),
         "## Plot Index",
         "",
     ]
@@ -322,7 +434,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
             "- The current candidate selection is loose and demonstrator-oriented.",
             "- A Higgs-scale accumulation in signal MC is a sanity check, not a measurement.",
             "- No background modeling, trigger efficiency, scale factors, or systematic uncertainties are included.",
-            "- GenPart truth matching is deferred to a later physics-validation stage.",
+            "- GenPart truth matching, when present, is a simple angular sanity check; efficiency and resolution studies are deferred.",
             "",
             "## Known Limitations",
             "",
@@ -330,7 +442,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
             "- NanoAODv15-like signal MC is not identical to true reduced Run-3 scouting object collections.",
             "- Matplotlib may be missing in the current environment.",
             "- The report is candidate-level and reconstruction-level only.",
-            "- No truth matching is included yet.",
+            "- Truth matching is preliminary and does not define final signal efficiency.",
             "- No background comparison is included yet.",
             "",
         ]

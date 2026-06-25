@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
 use nano_io::scouting_hrhogamma::{
-    load_branch_mapping, reconstruct_event, EventInputs, HCand, HToRhoGammaBranchMapping,
-    HToRhoGammaCuts,
+    identify_truth_chain, load_branch_mapping, match_reco_to_truth, reconstruct_event, EventInputs,
+    GenParticle, HCand, HToRhoGammaBranchMapping, HToRhoGammaCuts, HToRhoGammaTruth,
+    TruthMatchResult, TruthTopology,
 };
 use nano_io::writer::{write_events, OutputBranch};
 
@@ -25,15 +26,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let (cuts, cut_source, mapping, mapping_source) = load_config(&options)?;
-    let schema = scouting_schema(&mapping)?;
+    let schema = scouting_schema(&mapping, options.truth)?;
     let mut root_writer = options
         .root_path
         .as_deref()
-        .map(|_| CandidateRootWriter::default());
+        .map(|_| CandidateRootWriter::new(options.truth));
     let mut csv_writer = options
         .csv_path
         .as_deref()
-        .map(CandidateCsvWriter::create)
+        .map(|path| CandidateCsvWriter::create(path, options.truth))
         .transpose()?;
     println!("input: {}", options.input.display());
     println!("max_events: {}", display_limit(options.max_events));
@@ -55,6 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or_else(|| "none".to_string())
     );
     println!("branch_schema: ok");
+    println!("truth: {}", options.truth);
     println!("branch_catalogue_source: {mapping_source}");
     println!(
         "branch_mapping: {}({}, {}, {}, {}), {}({}, {}, {}, {}, {}, {})",
@@ -93,6 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &cuts,
         &mapping,
         options.max_events,
+        options.truth,
         csv_writer.as_mut(),
         root_writer.as_mut(),
     )?;
@@ -113,6 +116,7 @@ struct Options {
     config_explicit: bool,
     csv_path: Option<PathBuf>,
     root_path: Option<PathBuf>,
+    truth: bool,
 }
 
 impl Options {
@@ -120,6 +124,7 @@ impl Options {
         let mut positional = Vec::new();
         let mut csv_path = None;
         let mut root_path = None;
+        let mut truth = false;
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -132,6 +137,9 @@ impl Options {
                 "--root" => {
                     let value = args.next().ok_or("missing value after --root")?;
                     root_path = Some(PathBuf::from(value));
+                }
+                "--truth" => {
+                    truth = true;
                 }
                 _ if arg.starts_with("--") => {
                     return Err(format!("unknown option: {arg}").into());
@@ -191,6 +199,7 @@ impl Options {
             config_explicit,
             csv_path,
             root_path,
+            truth,
         }))
     }
 }
@@ -238,7 +247,10 @@ fn load_config(
     ))
 }
 
-fn scouting_schema(mapping: &HToRhoGammaBranchMapping) -> Result<BranchSchema, Box<dyn Error>> {
+fn scouting_schema(
+    mapping: &HToRhoGammaBranchMapping,
+    truth: bool,
+) -> Result<BranchSchema, Box<dyn Error>> {
     let mut specs = vec![
         BranchSpec::new("run", BranchType::U32),
         BranchSpec::new("luminosityBlock", BranchType::U32),
@@ -256,6 +268,19 @@ fn scouting_schema(mapping: &HToRhoGammaBranchMapping) -> Result<BranchSchema, B
     if let Some(mass) = &mapping.charged_candidate.mass {
         specs.push(BranchSpec::new(mass, BranchType::VecF32).optional());
     }
+    if truth {
+        specs.extend([
+            BranchSpec::new("nGenPart", BranchType::I32).optional(),
+            BranchSpec::new("GenPart_pdgId", BranchType::VecI32).optional(),
+            BranchSpec::new("GenPart_genPartIdxMother", BranchType::VecI16).optional(),
+            BranchSpec::new("GenPart_status", BranchType::VecI32).optional(),
+            BranchSpec::new("GenPart_statusFlags", BranchType::VecU16).optional(),
+            BranchSpec::new("GenPart_pt", BranchType::VecF32).optional(),
+            BranchSpec::new("GenPart_eta", BranchType::VecF32).optional(),
+            BranchSpec::new("GenPart_phi", BranchType::VecF32).optional(),
+            BranchSpec::new("GenPart_mass", BranchType::VecF32).optional(),
+        ]);
+    }
     Ok(BranchSchema::new(specs)?)
 }
 
@@ -265,6 +290,7 @@ fn analyze(
     cuts: &HToRhoGammaCuts,
     mapping: &HToRhoGammaBranchMapping,
     max_events: Option<usize>,
+    truth_enabled: bool,
     mut csv_writer: Option<&mut CandidateCsvWriter>,
     mut root_writer: Option<&mut CandidateRootWriter>,
 ) -> Result<Report, Box<dyn Error>> {
@@ -369,6 +395,15 @@ fn analyze(
         let Some(h) = reco.h else {
             continue;
         };
+        let truth = if truth_enabled {
+            let truth = read_truth(&event)?;
+            if truth.is_some() {
+                report.truth_available_events += 1;
+            }
+            Some(match_reco_to_truth(&h, truth.as_ref()))
+        } else {
+            None
+        };
         report.cutflow.gamma_rho_delta_r += 1;
         report.cutflow.h_candidate += 1;
 
@@ -382,7 +417,20 @@ fn analyze(
             gamma_rho_delta_r,
             rho_over_gamma_pt: h.rho.pt / h.gamma.pt,
             h,
+            truth,
         };
+
+        if let Some(truth) = candidate.truth {
+            match truth.truth_topology {
+                TruthTopology::ExplicitRho => report.truth_explicit_rho += 1,
+                TruthTopology::FallbackNoExplicitRho => report.truth_fallback += 1,
+                TruthTopology::NotFound => report.truth_not_found += 1,
+                TruthTopology::NotAvailable => report.truth_not_available += 1,
+            }
+            if truth.truth_matched {
+                report.truth_matched += 1;
+            }
+        }
 
         if let Some(writer) = csv_writer.as_deref_mut() {
             writer.write_candidate(&candidate)?;
@@ -414,6 +462,52 @@ fn validate_len(name: &str, actual: usize, expected: usize) -> Result<(), Box<dy
     }
 }
 
+fn read_truth(event: &nano_core::Event) -> Result<Option<HToRhoGammaTruth>, Box<dyn Error>> {
+    const REQUIRED: [&str; 7] = [
+        "nGenPart",
+        "GenPart_pdgId",
+        "GenPart_genPartIdxMother",
+        "GenPart_pt",
+        "GenPart_eta",
+        "GenPart_phi",
+        "GenPart_mass",
+    ];
+    if !REQUIRED
+        .iter()
+        .all(|branch| event.has_physical_branch(branch))
+    {
+        return Ok(None);
+    }
+    let n_gen = nonnegative_count(event.scalar::<i32>("nGenPart")?, "nGenPart")?;
+    let pdg_id = event.vector_ref::<i32>("GenPart_pdgId")?;
+    let mother = event.vector_ref::<i16>("GenPart_genPartIdxMother")?;
+    let pt = event.vector_ref::<f32>("GenPart_pt")?;
+    let eta = event.vector_ref::<f32>("GenPart_eta")?;
+    let phi = event.vector_ref::<f32>("GenPart_phi")?;
+    let mass = event.vector_ref::<f32>("GenPart_mass")?;
+    validate_len("GenPart_pdgId", pdg_id.len(), n_gen)?;
+    validate_len("GenPart_genPartIdxMother", mother.len(), n_gen)?;
+    validate_len("GenPart_pt", pt.len(), n_gen)?;
+    validate_len("GenPart_eta", eta.len(), n_gen)?;
+    validate_len("GenPart_phi", phi.len(), n_gen)?;
+    validate_len("GenPart_mass", mass.len(), n_gen)?;
+
+    let particles = (0..n_gen)
+        .map(|index| {
+            let mother_index = usize::try_from(mother[index]).ok();
+            GenParticle::new(
+                pdg_id[index],
+                mother_index,
+                f64::from(pt[index]),
+                f64::from(eta[index]),
+                f64::from(phi[index]),
+                f64::from(mass[index]),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(identify_truth_chain(&particles)))
+}
+
 fn print_report(report: &Report) {
     println!("processed_events: {}", report.cutflow.all_events);
     println!(
@@ -426,6 +520,15 @@ fn print_report(report: &Report) {
             .unwrap_or_else(|| "n/a".to_string())
     );
     println!("accepted_candidates: {}", report.cutflow.h_candidate);
+    println!(
+        "truth_summary: available_events={} matched_candidates={} explicit_rho={} fallback_no_explicit_rho={} not_found={} not_available={}",
+        report.truth_available_events,
+        report.truth_matched,
+        report.truth_explicit_rho,
+        report.truth_fallback,
+        report.truth_not_found,
+        report.truth_not_available
+    );
     println!("cutflow:");
     println!("  all_events {}", report.cutflow.all_events);
     println!("  leading_photon_pt {}", report.cutflow.leading_photon);
@@ -493,6 +596,12 @@ struct Report {
     minus_pions: usize,
     pion_mass_sum: f64,
     pion_mass_count: usize,
+    truth_available_events: usize,
+    truth_matched: usize,
+    truth_explicit_rho: usize,
+    truth_fallback: usize,
+    truth_not_found: usize,
+    truth_not_available: usize,
     candidates: Vec<CandidateSummary>,
 }
 
@@ -522,24 +631,26 @@ struct CandidateSummary {
     h: HCand,
     gamma_rho_delta_r: f64,
     rho_over_gamma_pt: f64,
+    truth: Option<TruthMatchResult>,
 }
 
 struct CandidateCsvWriter {
     writer: BufWriter<File>,
+    truth: bool,
 }
 
 impl CandidateCsvWriter {
-    fn create(path: &Path) -> Result<Self, Box<dyn Error>> {
+    fn create(path: &Path, truth: bool) -> Result<Self, Box<dyn Error>> {
         let file = File::create(path)
             .map_err(|err| format!("failed to create candidate CSV {}: {err}", path.display()))?;
         let mut writer = BufWriter::new(file);
-        writeln!(writer, "{}", candidate_csv_header())?;
-        Ok(Self { writer })
+        writeln!(writer, "{}", candidate_csv_header(truth))?;
+        Ok(Self { writer, truth })
     }
 
     fn write_candidate(&mut self, candidate: &CandidateSummary) -> Result<(), Box<dyn Error>> {
         let h = &candidate.h;
-        writeln!(
+        write!(
             self.writer,
             "{},{},{},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8},{:.8}",
             candidate.run,
@@ -566,6 +677,44 @@ impl CandidateCsvWriter {
             candidate.gamma_rho_delta_r,
             candidate.rho_over_gamma_pt
         )?;
+        if self.truth {
+            let truth = candidate
+                .truth
+                .unwrap_or_else(TruthMatchResult::not_available);
+            write!(
+                self.writer,
+                ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                truth.truth_available as u8,
+                truth.truth_topology.as_str(),
+                truth.truth_matched as u8,
+                opt(truth.gen_h.map(|p| p.pt)),
+                opt(truth.gen_h.map(|p| p.eta)),
+                opt(truth.gen_h.map(|p| p.phi)),
+                opt(truth.gen_h.map(|p| p.mass)),
+                opt(truth.gen_rho.map(|p| p.pt)),
+                opt(truth.gen_rho.map(|p| p.eta)),
+                opt(truth.gen_rho.map(|p| p.phi)),
+                opt(truth.gen_rho.map(|p| p.mass)),
+                opt(truth.gen_photon.map(|p| p.pt)),
+                opt(truth.gen_photon.map(|p| p.eta)),
+                opt(truth.gen_photon.map(|p| p.phi)),
+                opt(truth.gen_pi_plus.map(|p| p.pt)),
+                opt(truth.gen_pi_plus.map(|p| p.eta)),
+                opt(truth.gen_pi_plus.map(|p| p.phi)),
+                opt(truth.gen_pi_minus.map(|p| p.pt)),
+                opt(truth.gen_pi_minus.map(|p| p.eta)),
+                opt(truth.gen_pi_minus.map(|p| p.phi)),
+                opt(truth.delta_r_reco_photon_gen_photon),
+                opt(truth.delta_r_reco_pi_plus_gen_pi_plus),
+                opt(truth.delta_r_reco_pi_minus_gen_pi_minus),
+                opt(truth.delta_r_reco_rho_gen_rho),
+                opt(truth.reco_h_mass_minus_gen_h_mass),
+                opt(truth.reco_rho_mass_minus_gen_rho_mass),
+                opt(truth.reco_photon_pt_over_gen_photon_pt),
+                opt(truth.reco_rho_pt_over_gen_rho_pt),
+            )?;
+        }
+        writeln!(self.writer)?;
         Ok(())
     }
 
@@ -575,12 +724,22 @@ impl CandidateCsvWriter {
     }
 }
 
-fn candidate_csv_header() -> &'static str {
-    "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt"
+fn candidate_csv_header(truth: bool) -> String {
+    let base = "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,pi_plus_pt,pi_plus_eta,pi_plus_phi,pi_minus_pt,pi_minus_eta,pi_minus_phi,rho_mass,rho_pt,rho_eta,rho_phi,h_mass,h_pt,h_eta,h_phi,delta_r_pipi,delta_r_gamma_rho,rho_pt_over_photon_pt";
+    if truth {
+        format!("{base},truth_available,truth_topology,truth_matched,gen_h_pt,gen_h_eta,gen_h_phi,gen_h_mass,gen_rho_pt,gen_rho_eta,gen_rho_phi,gen_rho_mass,gen_photon_pt,gen_photon_eta,gen_photon_phi,gen_pi_plus_pt,gen_pi_plus_eta,gen_pi_plus_phi,gen_pi_minus_pt,gen_pi_minus_eta,gen_pi_minus_phi,delta_r_reco_photon_gen_photon,delta_r_reco_pi_plus_gen_pi_plus,delta_r_reco_pi_minus_gen_pi_minus,delta_r_reco_rho_gen_rho,reco_h_mass_minus_gen_h_mass,reco_rho_mass_minus_gen_rho_mass,reco_photon_pt_over_gen_photon_pt,reco_rho_pt_over_gen_rho_pt")
+    } else {
+        base.to_string()
+    }
+}
+
+fn opt(value: Option<f64>) -> String {
+    value.map(|value| format!("{value:.8}")).unwrap_or_default()
 }
 
 #[derive(Debug, Default)]
 struct CandidateRootWriter {
+    truth_enabled: bool,
     run: Vec<u32>,
     luminosity_block: Vec<u32>,
     event: Vec<u64>,
@@ -604,9 +763,44 @@ struct CandidateRootWriter {
     delta_r_pipi: Vec<f32>,
     delta_r_gamma_rho: Vec<f32>,
     rho_pt_over_photon_pt: Vec<f32>,
+    truth_available: Vec<bool>,
+    truth_matched: Vec<bool>,
+    truth_topology_code: Vec<i32>,
+    gen_h_pt: Vec<f32>,
+    gen_h_eta: Vec<f32>,
+    gen_h_phi: Vec<f32>,
+    gen_h_mass: Vec<f32>,
+    gen_rho_pt: Vec<f32>,
+    gen_rho_eta: Vec<f32>,
+    gen_rho_phi: Vec<f32>,
+    gen_rho_mass: Vec<f32>,
+    gen_photon_pt: Vec<f32>,
+    gen_photon_eta: Vec<f32>,
+    gen_photon_phi: Vec<f32>,
+    gen_pi_plus_pt: Vec<f32>,
+    gen_pi_plus_eta: Vec<f32>,
+    gen_pi_plus_phi: Vec<f32>,
+    gen_pi_minus_pt: Vec<f32>,
+    gen_pi_minus_eta: Vec<f32>,
+    gen_pi_minus_phi: Vec<f32>,
+    delta_r_reco_photon_gen_photon: Vec<f32>,
+    delta_r_reco_pi_plus_gen_pi_plus: Vec<f32>,
+    delta_r_reco_pi_minus_gen_pi_minus: Vec<f32>,
+    delta_r_reco_rho_gen_rho: Vec<f32>,
+    reco_h_mass_minus_gen_h_mass: Vec<f32>,
+    reco_rho_mass_minus_gen_rho_mass: Vec<f32>,
+    reco_photon_pt_over_gen_photon_pt: Vec<f32>,
+    reco_rho_pt_over_gen_rho_pt: Vec<f32>,
 }
 
 impl CandidateRootWriter {
+    fn new(truth_enabled: bool) -> Self {
+        Self {
+            truth_enabled,
+            ..Self::default()
+        }
+    }
+
     fn write_candidate(&mut self, candidate: &CandidateSummary) {
         let h = &candidate.h;
         self.run.push(candidate.run);
@@ -634,10 +828,66 @@ impl CandidateRootWriter {
             .push(candidate.gamma_rho_delta_r as f32);
         self.rho_pt_over_photon_pt
             .push(candidate.rho_over_gamma_pt as f32);
+        if self.truth_enabled {
+            let truth = candidate
+                .truth
+                .unwrap_or_else(TruthMatchResult::not_available);
+            self.truth_available.push(truth.truth_available);
+            self.truth_matched.push(truth.truth_matched);
+            self.truth_topology_code.push(truth.truth_topology.code());
+            push_particle(
+                &mut self.gen_h_pt,
+                &mut self.gen_h_eta,
+                &mut self.gen_h_phi,
+                &mut self.gen_h_mass,
+                truth.gen_h,
+            );
+            push_particle(
+                &mut self.gen_rho_pt,
+                &mut self.gen_rho_eta,
+                &mut self.gen_rho_phi,
+                &mut self.gen_rho_mass,
+                truth.gen_rho,
+            );
+            push_particle_no_mass(
+                &mut self.gen_photon_pt,
+                &mut self.gen_photon_eta,
+                &mut self.gen_photon_phi,
+                truth.gen_photon,
+            );
+            push_particle_no_mass(
+                &mut self.gen_pi_plus_pt,
+                &mut self.gen_pi_plus_eta,
+                &mut self.gen_pi_plus_phi,
+                truth.gen_pi_plus,
+            );
+            push_particle_no_mass(
+                &mut self.gen_pi_minus_pt,
+                &mut self.gen_pi_minus_eta,
+                &mut self.gen_pi_minus_phi,
+                truth.gen_pi_minus,
+            );
+            self.delta_r_reco_photon_gen_photon
+                .push(opt_f32(truth.delta_r_reco_photon_gen_photon));
+            self.delta_r_reco_pi_plus_gen_pi_plus
+                .push(opt_f32(truth.delta_r_reco_pi_plus_gen_pi_plus));
+            self.delta_r_reco_pi_minus_gen_pi_minus
+                .push(opt_f32(truth.delta_r_reco_pi_minus_gen_pi_minus));
+            self.delta_r_reco_rho_gen_rho
+                .push(opt_f32(truth.delta_r_reco_rho_gen_rho));
+            self.reco_h_mass_minus_gen_h_mass
+                .push(opt_f32(truth.reco_h_mass_minus_gen_h_mass));
+            self.reco_rho_mass_minus_gen_rho_mass
+                .push(opt_f32(truth.reco_rho_mass_minus_gen_rho_mass));
+            self.reco_photon_pt_over_gen_photon_pt
+                .push(opt_f32(truth.reco_photon_pt_over_gen_photon_pt));
+            self.reco_rho_pt_over_gen_rho_pt
+                .push(opt_f32(truth.reco_rho_pt_over_gen_rho_pt));
+        }
     }
 
     fn save(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        let branches = vec![
+        let mut branches = vec![
             OutputBranch::u32("run", std::mem::take(&mut self.run)),
             OutputBranch::u32(
                 "luminosityBlock",
@@ -671,7 +921,100 @@ impl CandidateRootWriter {
                 std::mem::take(&mut self.rho_pt_over_photon_pt),
             ),
         ];
+        if self.truth_enabled {
+            branches.extend([
+                OutputBranch::bool("truth_available", std::mem::take(&mut self.truth_available)),
+                OutputBranch::bool("truth_matched", std::mem::take(&mut self.truth_matched)),
+                OutputBranch::i32(
+                    "truth_topology_code",
+                    std::mem::take(&mut self.truth_topology_code),
+                ),
+                OutputBranch::f32("gen_h_pt", std::mem::take(&mut self.gen_h_pt)),
+                OutputBranch::f32("gen_h_eta", std::mem::take(&mut self.gen_h_eta)),
+                OutputBranch::f32("gen_h_phi", std::mem::take(&mut self.gen_h_phi)),
+                OutputBranch::f32("gen_h_mass", std::mem::take(&mut self.gen_h_mass)),
+                OutputBranch::f32("gen_rho_pt", std::mem::take(&mut self.gen_rho_pt)),
+                OutputBranch::f32("gen_rho_eta", std::mem::take(&mut self.gen_rho_eta)),
+                OutputBranch::f32("gen_rho_phi", std::mem::take(&mut self.gen_rho_phi)),
+                OutputBranch::f32("gen_rho_mass", std::mem::take(&mut self.gen_rho_mass)),
+                OutputBranch::f32("gen_photon_pt", std::mem::take(&mut self.gen_photon_pt)),
+                OutputBranch::f32("gen_photon_eta", std::mem::take(&mut self.gen_photon_eta)),
+                OutputBranch::f32("gen_photon_phi", std::mem::take(&mut self.gen_photon_phi)),
+                OutputBranch::f32("gen_pi_plus_pt", std::mem::take(&mut self.gen_pi_plus_pt)),
+                OutputBranch::f32("gen_pi_plus_eta", std::mem::take(&mut self.gen_pi_plus_eta)),
+                OutputBranch::f32("gen_pi_plus_phi", std::mem::take(&mut self.gen_pi_plus_phi)),
+                OutputBranch::f32("gen_pi_minus_pt", std::mem::take(&mut self.gen_pi_minus_pt)),
+                OutputBranch::f32(
+                    "gen_pi_minus_eta",
+                    std::mem::take(&mut self.gen_pi_minus_eta),
+                ),
+                OutputBranch::f32(
+                    "gen_pi_minus_phi",
+                    std::mem::take(&mut self.gen_pi_minus_phi),
+                ),
+                OutputBranch::f32(
+                    "delta_r_reco_photon_gen_photon",
+                    std::mem::take(&mut self.delta_r_reco_photon_gen_photon),
+                ),
+                OutputBranch::f32(
+                    "delta_r_reco_pi_plus_gen_pi_plus",
+                    std::mem::take(&mut self.delta_r_reco_pi_plus_gen_pi_plus),
+                ),
+                OutputBranch::f32(
+                    "delta_r_reco_pi_minus_gen_pi_minus",
+                    std::mem::take(&mut self.delta_r_reco_pi_minus_gen_pi_minus),
+                ),
+                OutputBranch::f32(
+                    "delta_r_reco_rho_gen_rho",
+                    std::mem::take(&mut self.delta_r_reco_rho_gen_rho),
+                ),
+                OutputBranch::f32(
+                    "reco_h_mass_minus_gen_h_mass",
+                    std::mem::take(&mut self.reco_h_mass_minus_gen_h_mass),
+                ),
+                OutputBranch::f32(
+                    "reco_rho_mass_minus_gen_rho_mass",
+                    std::mem::take(&mut self.reco_rho_mass_minus_gen_rho_mass),
+                ),
+                OutputBranch::f32(
+                    "reco_photon_pt_over_gen_photon_pt",
+                    std::mem::take(&mut self.reco_photon_pt_over_gen_photon_pt),
+                ),
+                OutputBranch::f32(
+                    "reco_rho_pt_over_gen_rho_pt",
+                    std::mem::take(&mut self.reco_rho_pt_over_gen_rho_pt),
+                ),
+            ]);
+        }
         write_events(path, &branches)?;
         Ok(())
     }
+}
+
+fn opt_f32(value: Option<f64>) -> f32 {
+    value.map(|value| value as f32).unwrap_or(f32::NAN)
+}
+
+fn push_particle(
+    pt: &mut Vec<f32>,
+    eta: &mut Vec<f32>,
+    phi: &mut Vec<f32>,
+    mass: &mut Vec<f32>,
+    particle: Option<GenParticle>,
+) {
+    pt.push(opt_f32(particle.map(|particle| particle.pt)));
+    eta.push(opt_f32(particle.map(|particle| particle.eta)));
+    phi.push(opt_f32(particle.map(|particle| particle.phi)));
+    mass.push(opt_f32(particle.map(|particle| particle.mass)));
+}
+
+fn push_particle_no_mass(
+    pt: &mut Vec<f32>,
+    eta: &mut Vec<f32>,
+    phi: &mut Vec<f32>,
+    particle: Option<GenParticle>,
+) {
+    pt.push(opt_f32(particle.map(|particle| particle.pt)));
+    eta.push(opt_f32(particle.map(|particle| particle.eta)));
+    phi.push(opt_f32(particle.map(|particle| particle.phi)));
 }

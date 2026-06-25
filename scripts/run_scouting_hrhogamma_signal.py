@@ -90,6 +90,16 @@ def parse_args() -> argparse.Namespace:
         help="local ROOT file paths to run instead of resolving/reading DAS",
     )
     parser.add_argument(
+        "--local-dir",
+        type=Path,
+        help="directory of local ROOT files to run in sorted order",
+    )
+    parser.add_argument(
+        "--local-glob",
+        default="*.root",
+        help="glob used with --local-dir",
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_CONFIG,
@@ -136,6 +146,11 @@ def parse_args() -> argparse.Namespace:
         "--report-only",
         action="store_true",
         help="reuse existing CSV outputs and regenerate plots/report without ROOT processing",
+    )
+    parser.add_argument(
+        "--truth",
+        action="store_true",
+        help="request optional GenPart truth validation in the Rust example",
     )
     parser.add_argument(
         "--release",
@@ -225,11 +240,18 @@ def safe_file_limit(args: argparse.Namespace) -> int | None:
 def validate_source_args(args: argparse.Namespace) -> None:
     sources = sum(
         1
-        for enabled in (args.manifest is not None, args.resolve_das, args.local_files is not None)
+        for enabled in (
+            args.manifest is not None,
+            args.resolve_das,
+            args.local_files is not None,
+            args.local_dir is not None,
+        )
         if enabled
     )
     if sources != 1:
-        raise ValueError("choose exactly one of --manifest, --resolve-das, or --local-files")
+        raise ValueError(
+            "choose exactly one of --manifest, --resolve-das, --local-files, or --local-dir"
+        )
     if args.max_events_per_file is not None and args.max_events_per_file < 0:
         raise ValueError("--max-events-per-file must be non-negative")
     if args.no_csv and args.plots_only:
@@ -410,6 +432,23 @@ def local_inputs(paths: list[str]) -> tuple[str, list[InputFile]]:
     )
 
 
+def local_dir_inputs(directory: Path, pattern: str) -> tuple[str, list[InputFile]]:
+    if not directory.exists():
+        raise FileNotFoundError(f"local directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise NotADirectoryError(f"--local-dir is not a directory: {directory}")
+    paths = sorted(path for path in directory.glob(pattern) if path.is_file())
+    if not paths:
+        raise FileNotFoundError(f"no files matching {pattern!r} in {directory}")
+    return (
+        "local-dir",
+        [
+            InputFile(label=f"file_{index:06d}", path=str(path), lfn=None)
+            for index, path in enumerate(paths, start=1)
+        ],
+    )
+
+
 def select_inputs(inputs: list[InputFile], limit: int | None) -> list[InputFile]:
     if limit is None:
         return inputs
@@ -498,6 +537,8 @@ def reco_command(
     command.append(str(args.config))
     if not args.no_csv:
         command.extend(["--csv", str(csv_path)])
+    if args.truth:
+        command.append("--truth")
     return command
 
 
@@ -680,6 +721,11 @@ def run_plots(args: argparse.Namespace, combined_csv: Path, plots_dir: Path) -> 
         )
     if "plots skipped" in result.stderr:
         return "skipped (matplotlib unavailable)"
+    summary_path = plots_dir / "summary.txt"
+    if summary_path.exists():
+        for line in summary_path.read_text().splitlines():
+            if line.startswith("plots:"):
+                return line.split(":", 1)[1].strip()
     return "requested"
 
 
@@ -738,7 +784,7 @@ def write_physics_report(
         "--title",
         args.report_title,
     ]
-    if dataset == "local-files":
+    if dataset in {"local-files", "local-dir"}:
         command.extend(["--local-files-count", str(len(inputs))])
     result = subprocess.run(
         command,
@@ -802,6 +848,8 @@ def write_summary(
         f"download_timeout: {args.download_timeout}",
         f"cache_policy: {'clean after successful file' if args.clean_cache else 'keep cached files'}",
         f"force_download: {args.force_download}",
+        f"truth: {args.truth}",
+        f"local_glob: {args.local_glob}",
         f"resolved_files: {resolved_count}",
         f"selected_files: {len(selected_inputs)}",
         f"max_files: {'all' if args.all_files else safe_file_limit(args)}",
@@ -862,6 +910,8 @@ def main() -> int:
         elif args.manifest is not None:
             manifest_path = copy_manifest(args.manifest, outdir)
             dataset, inputs = read_manifest_inputs(manifest_path, args.xrootd)
+        elif args.local_dir is not None:
+            dataset, inputs = local_dir_inputs(args.local_dir, args.local_glob)
         else:
             dataset, inputs = local_inputs(args.local_files)
 

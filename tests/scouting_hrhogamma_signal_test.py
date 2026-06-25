@@ -71,6 +71,30 @@ class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
             "/tmp/file_000001.root",
         )
 
+    def test_local_dir_discovery_returns_sorted_root_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "b.root").write_text("")
+            (directory / "a.root").write_text("")
+            (directory / "notes.txt").write_text("")
+
+            dataset, inputs = run_signal.local_dir_inputs(directory, "*.root")
+
+            self.assertEqual(dataset, "local-dir")
+            self.assertEqual([Path(item.path).name for item in inputs], ["a.root", "b.root"])
+            self.assertEqual([item.label for item in inputs], ["file_000001", "file_000002"])
+
+    def test_local_dir_with_max_files_selects_sorted_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name in ("c.root", "a.root", "b.root"):
+                (directory / name).write_text("")
+
+            _, inputs = run_signal.local_dir_inputs(directory, "*.root")
+            selected = run_signal.select_inputs(inputs, 2)
+
+            self.assertEqual([Path(item.path).name for item in selected], ["a.root", "b.root"])
+
     def test_remote_without_download_fails_clearly(self):
         with self.assertRaisesRegex(
             ValueError,

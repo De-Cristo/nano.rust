@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REPORT_SCRIPT = REPO_ROOT / "scripts" / "write_scouting_hrhogamma_report.py"
 PRODUCTION_SCRIPT = REPO_ROOT / "scripts" / "run_scouting_hrhogamma_signal.py"
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
+TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
 PER_FILE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal" / "per_file"
 
 
@@ -105,6 +106,71 @@ class ScoutingHToRhoGammaReportTest(unittest.TestCase):
             self.assertIn("PNG plots were not produced: skipped (matplotlib unavailable)", text)
             self.assertIn("Expected plots not produced", text)
             self.assertIn("plots/h_mass.png", text)
+
+    def test_report_recognizes_truth_columns_and_writes_truth_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            plots = outdir / "plots"
+            plots.mkdir(parents=True)
+            for name in ("truth_matched_fraction.png", "reco_h_mass_minus_gen_h_mass.png"):
+                (plots / name).write_bytes(b"fake png")
+            combined_csv = outdir / "combined_candidates.csv"
+            combined_csv.write_text(TRUTH_FIXTURE.read_text())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT_SCRIPT),
+                    "--csv",
+                    str(combined_csv),
+                    "--outdir",
+                    str(outdir),
+                    "--plots-status",
+                    "wrote 27 PNG files and 27 PDF files",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "physics_summary.md").read_text()
+            self.assertIn("## Truth Validation", text)
+            self.assertIn("truth available candidates: `2` / `2` (`1.000000`)", text)
+            self.assertIn("truth matched candidates: `1` / `2` (`0.500000`)", text)
+            self.assertIn("explicit_rho: `1`", text)
+            self.assertIn("fallback_no_explicit_rho: `1`", text)
+            self.assertIn("dR(photon), dR(pi+), dR(pi-) < 0.1", text)
+            self.assertIn("| delta_r_reco_photon_gen_photon | 2 | 0.010000 | 0.325000 |", text)
+            self.assertIn("- [truth_matched_fraction](plots/truth_matched_fraction.png)", text)
+
+    def test_report_handles_absent_truth_columns_gracefully(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            outdir.mkdir()
+            combined_csv = outdir / "combined_candidates.csv"
+            combined_csv.write_text(FIXTURE.read_text())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT_SCRIPT),
+                    "--csv",
+                    str(combined_csv),
+                    "--outdir",
+                    str(outdir),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "physics_summary.md").read_text()
+            self.assertIn("## Truth Validation", text)
+            self.assertIn("Truth validation was not requested or truth columns are absent.", text)
 
     def test_production_report_only_reuses_fixture_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:

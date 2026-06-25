@@ -549,6 +549,258 @@ pub fn delta_phi(phi_a: f64, phi_b: f64) -> f64 {
     dphi
 }
 
+pub const TRUTH_MATCH_DELTA_R_MAX: f64 = 0.1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GenParticle {
+    pub pdg_id: i32,
+    pub mother_index: Option<usize>,
+    pub pt: f64,
+    pub eta: f64,
+    pub phi: f64,
+    pub mass: f64,
+}
+
+impl GenParticle {
+    pub fn new(
+        pdg_id: i32,
+        mother_index: Option<usize>,
+        pt: f64,
+        eta: f64,
+        phi: f64,
+        mass: f64,
+    ) -> Self {
+        Self {
+            pdg_id,
+            mother_index,
+            pt,
+            eta,
+            phi,
+            mass,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthTopology {
+    NotAvailable,
+    ExplicitRho,
+    FallbackNoExplicitRho,
+    NotFound,
+}
+
+impl TruthTopology {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAvailable => "not_available",
+            Self::ExplicitRho => "explicit_rho",
+            Self::FallbackNoExplicitRho => "fallback_no_explicit_rho",
+            Self::NotFound => "not_found",
+        }
+    }
+
+    pub fn code(self) -> i32 {
+        match self {
+            Self::NotAvailable => 0,
+            Self::ExplicitRho => 1,
+            Self::FallbackNoExplicitRho => 2,
+            Self::NotFound => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HToRhoGammaTruth {
+    pub topology: TruthTopology,
+    pub h: Option<GenParticle>,
+    pub rho: Option<GenParticle>,
+    pub photon: Option<GenParticle>,
+    pub pi_plus: Option<GenParticle>,
+    pub pi_minus: Option<GenParticle>,
+}
+
+impl HToRhoGammaTruth {
+    pub fn not_available() -> Self {
+        Self {
+            topology: TruthTopology::NotAvailable,
+            h: None,
+            rho: None,
+            photon: None,
+            pi_plus: None,
+            pi_minus: None,
+        }
+    }
+
+    pub fn not_found(h: Option<GenParticle>) -> Self {
+        Self {
+            topology: TruthTopology::NotFound,
+            h,
+            rho: None,
+            photon: None,
+            pi_plus: None,
+            pi_minus: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TruthMatchResult {
+    pub truth_available: bool,
+    pub truth_topology: TruthTopology,
+    pub truth_matched: bool,
+    pub gen_h: Option<GenParticle>,
+    pub gen_rho: Option<GenParticle>,
+    pub gen_photon: Option<GenParticle>,
+    pub gen_pi_plus: Option<GenParticle>,
+    pub gen_pi_minus: Option<GenParticle>,
+    pub delta_r_reco_photon_gen_photon: Option<f64>,
+    pub delta_r_reco_pi_plus_gen_pi_plus: Option<f64>,
+    pub delta_r_reco_pi_minus_gen_pi_minus: Option<f64>,
+    pub delta_r_reco_rho_gen_rho: Option<f64>,
+    pub reco_h_mass_minus_gen_h_mass: Option<f64>,
+    pub reco_rho_mass_minus_gen_rho_mass: Option<f64>,
+    pub reco_photon_pt_over_gen_photon_pt: Option<f64>,
+    pub reco_rho_pt_over_gen_rho_pt: Option<f64>,
+}
+
+impl TruthMatchResult {
+    pub fn not_available() -> Self {
+        Self {
+            truth_available: false,
+            truth_topology: TruthTopology::NotAvailable,
+            truth_matched: false,
+            gen_h: None,
+            gen_rho: None,
+            gen_photon: None,
+            gen_pi_plus: None,
+            gen_pi_minus: None,
+            delta_r_reco_photon_gen_photon: None,
+            delta_r_reco_pi_plus_gen_pi_plus: None,
+            delta_r_reco_pi_minus_gen_pi_minus: None,
+            delta_r_reco_rho_gen_rho: None,
+            reco_h_mass_minus_gen_h_mass: None,
+            reco_rho_mass_minus_gen_rho_mass: None,
+            reco_photon_pt_over_gen_photon_pt: None,
+            reco_rho_pt_over_gen_rho_pt: None,
+        }
+    }
+}
+
+pub fn identify_truth_chain(particles: &[GenParticle]) -> HToRhoGammaTruth {
+    let h_index = particles.iter().position(|particle| particle.pdg_id == 25);
+    let Some(h_index) = h_index else {
+        return HToRhoGammaTruth::not_found(None);
+    };
+    let h = particles[h_index];
+    let photon = particles
+        .iter()
+        .copied()
+        .find(|particle| particle.pdg_id == 22 && is_descendant_of(particles, *particle, h_index));
+    let rho_index = particles.iter().position(|particle| {
+        particle.pdg_id == 113 && is_descendant_of(particles, *particle, h_index)
+    });
+    if let Some(rho_index) = rho_index {
+        let rho = particles[rho_index];
+        let pi_plus = particles.iter().copied().find(|particle| {
+            particle.pdg_id == 211 && is_descendant_of(particles, *particle, rho_index)
+        });
+        let pi_minus = particles.iter().copied().find(|particle| {
+            particle.pdg_id == -211 && is_descendant_of(particles, *particle, rho_index)
+        });
+        if photon.is_some() && pi_plus.is_some() && pi_minus.is_some() {
+            return HToRhoGammaTruth {
+                topology: TruthTopology::ExplicitRho,
+                h: Some(h),
+                rho: Some(rho),
+                photon,
+                pi_plus,
+                pi_minus,
+            };
+        }
+    }
+
+    let pi_plus = particles
+        .iter()
+        .copied()
+        .find(|particle| particle.pdg_id == 211 && is_descendant_of(particles, *particle, h_index));
+    let pi_minus = particles.iter().copied().find(|particle| {
+        particle.pdg_id == -211 && is_descendant_of(particles, *particle, h_index)
+    });
+    if photon.is_some() && pi_plus.is_some() && pi_minus.is_some() {
+        return HToRhoGammaTruth {
+            topology: TruthTopology::FallbackNoExplicitRho,
+            h: Some(h),
+            rho: None,
+            photon,
+            pi_plus,
+            pi_minus,
+        };
+    }
+    HToRhoGammaTruth::not_found(Some(h))
+}
+
+fn is_descendant_of(
+    particles: &[GenParticle],
+    particle: GenParticle,
+    ancestor_index: usize,
+) -> bool {
+    let mut current = particle.mother_index;
+    while let Some(index) = current {
+        if index == ancestor_index {
+            return true;
+        }
+        current = particles.get(index).and_then(|mother| mother.mother_index);
+    }
+    false
+}
+
+pub fn match_reco_to_truth(h: &HCand, truth: Option<&HToRhoGammaTruth>) -> TruthMatchResult {
+    let Some(truth) = truth else {
+        return TruthMatchResult::not_available();
+    };
+    if matches!(truth.topology, TruthTopology::NotAvailable) {
+        return TruthMatchResult::not_available();
+    }
+
+    let dr_photon = truth
+        .photon
+        .map(|gen| delta_r(h.gamma.eta, h.gamma.phi, gen.eta, gen.phi));
+    let dr_pi_plus = truth
+        .pi_plus
+        .map(|gen| delta_r(h.rho.pi_plus.eta, h.rho.pi_plus.phi, gen.eta, gen.phi));
+    let dr_pi_minus = truth
+        .pi_minus
+        .map(|gen| delta_r(h.rho.pi_minus.eta, h.rho.pi_minus.phi, gen.eta, gen.phi));
+    let dr_rho = truth
+        .rho
+        .map(|gen| delta_r(h.rho.eta, h.rho.phi, gen.eta, gen.phi));
+    let truth_matched = [dr_photon, dr_pi_plus, dr_pi_minus]
+        .into_iter()
+        .all(|value| value.is_some_and(|dr| dr < TRUTH_MATCH_DELTA_R_MAX));
+    TruthMatchResult {
+        truth_available: !matches!(truth.topology, TruthTopology::NotAvailable),
+        truth_topology: truth.topology,
+        truth_matched,
+        gen_h: truth.h,
+        gen_rho: truth.rho,
+        gen_photon: truth.photon,
+        gen_pi_plus: truth.pi_plus,
+        gen_pi_minus: truth.pi_minus,
+        delta_r_reco_photon_gen_photon: dr_photon,
+        delta_r_reco_pi_plus_gen_pi_plus: dr_pi_plus,
+        delta_r_reco_pi_minus_gen_pi_minus: dr_pi_minus,
+        delta_r_reco_rho_gen_rho: dr_rho,
+        reco_h_mass_minus_gen_h_mass: truth.h.map(|gen| h.mass - gen.mass),
+        reco_rho_mass_minus_gen_rho_mass: truth.rho.map(|gen| h.rho.mass - gen.mass),
+        reco_photon_pt_over_gen_photon_pt: truth
+            .photon
+            .and_then(|gen| (gen.pt > 0.0).then_some(h.gamma.pt / gen.pt)),
+        reco_rho_pt_over_gen_rho_pt: truth
+            .rho
+            .and_then(|gen| (gen.pt > 0.0).then_some(h.rho.pt / gen.pt)),
+    }
+}
+
 fn select_leading_photon(
     pt: &[f32],
     eta: &[f32],
@@ -978,5 +1230,107 @@ higgs_mass_reference = 125.0
         assert!(reco.has_pipi_delta_r_pair);
         assert!(reco.rho.is_some());
         assert!(reco.h.is_some());
+    }
+
+    #[test]
+    fn finds_explicit_h_to_rho_gamma_truth_chain() {
+        let truth = identify_truth_chain(&[
+            GenParticle::new(25, None, 100.0, 0.0, 0.0, 125.0),
+            GenParticle::new(22, Some(0), 60.0, 0.1, 0.1, 0.0),
+            GenParticle::new(113, Some(0), 40.0, -0.1, -0.1, 0.775),
+            GenParticle::new(211, Some(2), 25.0, -0.08, -0.08, 0.139),
+            GenParticle::new(-211, Some(2), 15.0, -0.12, -0.12, 0.139),
+        ]);
+
+        assert_eq!(truth.topology, TruthTopology::ExplicitRho);
+        assert!(truth.rho.is_some());
+        assert!(truth.pi_plus.is_some());
+        assert!(truth.pi_minus.is_some());
+    }
+
+    #[test]
+    fn finds_fallback_truth_chain_without_explicit_rho() {
+        let truth = identify_truth_chain(&[
+            GenParticle::new(25, None, 100.0, 0.0, 0.0, 125.0),
+            GenParticle::new(22, Some(0), 60.0, 0.1, 0.1, 0.0),
+            GenParticle::new(211, Some(0), 25.0, -0.08, -0.08, 0.139),
+            GenParticle::new(-211, Some(0), 15.0, -0.12, -0.12, 0.139),
+        ]);
+
+        assert_eq!(truth.topology, TruthTopology::FallbackNoExplicitRho);
+        assert!(truth.rho.is_none());
+    }
+
+    #[test]
+    fn missing_truth_chain_returns_not_found() {
+        let truth = identify_truth_chain(&[
+            GenParticle::new(25, None, 100.0, 0.0, 0.0, 125.0),
+            GenParticle::new(22, Some(0), 60.0, 0.1, 0.1, 0.0),
+        ]);
+
+        assert_eq!(truth.topology, TruthTopology::NotFound);
+    }
+
+    #[test]
+    fn truth_matching_uses_default_delta_r_threshold() {
+        let reco = reconstruct_event(
+            EventInputs {
+                photon_pt: &[100.0],
+                photon_eta: &[0.0],
+                photon_phi: &[0.0],
+                pfcand_pt: &[20.0, 10.0],
+                pfcand_eta: &[0.0, 0.0],
+                pfcand_phi: &[2.020, 2.050],
+                pfcand_pdg_id: &[211, -211],
+                pfcand_mass: None,
+            },
+            &default_cuts(),
+        );
+        let h = reco.h.expect("reco candidate");
+        let truth = HToRhoGammaTruth {
+            topology: TruthTopology::ExplicitRho,
+            h: Some(GenParticle::new(25, None, h.pt, h.eta, h.phi, 125.0)),
+            rho: Some(GenParticle::new(
+                113,
+                Some(0),
+                h.rho.pt,
+                h.rho.eta,
+                h.rho.phi,
+                0.775,
+            )),
+            photon: Some(GenParticle::new(
+                22,
+                Some(0),
+                h.gamma.pt,
+                h.gamma.eta,
+                h.gamma.phi,
+                0.0,
+            )),
+            pi_plus: Some(GenParticle::new(
+                211,
+                Some(1),
+                h.rho.pi_plus.pt,
+                h.rho.pi_plus.eta,
+                h.rho.pi_plus.phi,
+                0.139,
+            )),
+            pi_minus: Some(GenParticle::new(
+                -211,
+                Some(1),
+                h.rho.pi_minus.pt,
+                h.rho.pi_minus.eta,
+                h.rho.pi_minus.phi,
+                0.139,
+            )),
+        };
+
+        let matched = match_reco_to_truth(&h, Some(&truth));
+        assert!(matched.truth_matched);
+        assert_eq!(matched.truth_topology, TruthTopology::ExplicitRho);
+
+        let mut shifted_truth = truth;
+        shifted_truth.photon = Some(GenParticle::new(22, Some(0), h.gamma.pt, 1.0, 1.0, 0.0));
+        let mismatched = match_reco_to_truth(&h, Some(&shifted_truth));
+        assert!(!mismatched.truth_matched);
     }
 }

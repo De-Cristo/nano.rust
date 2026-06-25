@@ -34,7 +34,61 @@ PLOT_2D_COLUMNS = (
     ("h_mass", "rho_pt", "rho_pt_vs_h_mass.png"),
     ("h_mass", "delta_r_gamma_rho", "delta_r_gamma_rho_vs_h_mass.png"),
 )
+TRUTH_REQUIRED_COLUMNS = ("truth_available", "truth_topology", "truth_matched")
+TRUTH_SUMMARY_COLUMNS = (
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_rho_mass_minus_gen_rho_mass",
+    "delta_r_reco_photon_gen_photon",
+    "delta_r_reco_pi_plus_gen_pi_plus",
+    "delta_r_reco_pi_minus_gen_pi_minus",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_rho_pt_over_gen_rho_pt",
+)
+TRUTH_PLOT_COLUMNS = (
+    "reco_h_mass_minus_gen_h_mass",
+    "reco_rho_mass_minus_gen_rho_mass",
+    "delta_r_reco_photon_gen_photon",
+    "delta_r_reco_pi_plus_gen_pi_plus",
+    "delta_r_reco_pi_minus_gen_pi_minus",
+    "reco_photon_pt_over_gen_photon_pt",
+    "reco_rho_pt_over_gen_rho_pt",
+)
+TRUTH_PLOT_2D_COLUMNS = (
+    ("gen_h_mass", "h_mass", "reco_h_mass_vs_gen_h_mass.png"),
+    ("gen_rho_mass", "rho_mass", "reco_rho_mass_vs_gen_rho_mass.png"),
+    ("gen_photon_pt", "photon_pt", "reco_photon_pt_vs_gen_photon_pt.png"),
+    ("gen_rho_pt", "rho_pt", "reco_rho_pt_vs_gen_rho_pt.png"),
+)
+TRUTH_EXPECTED_PLOTS = (
+    "truth_matched_fraction.png",
+    "h_mass_truth_matched_vs_unmatched.png",
+    *tuple(f"{column}.png" for column in TRUTH_PLOT_COLUMNS),
+    *tuple(filename for _, _, filename in TRUTH_PLOT_2D_COLUMNS),
+)
 HIGGS_MASS_WINDOW = (100.0, 150.0)
+AXIS_LABELS = {
+    "h_mass": "m(H candidate) [GeV]",
+    "rho_mass": "m(rho candidate) [GeV]",
+    "photon_pt": "Photon pT [GeV]",
+    "rho_pt": "rho pT [GeV]",
+    "h_pt": "H candidate pT [GeV]",
+    "pi_plus_pt": "pi+ pT [GeV]",
+    "pi_minus_pt": "pi- pT [GeV]",
+    "delta_r_pipi": "DeltaR(pi+, pi-)",
+    "delta_r_gamma_rho": "DeltaR(gamma, rho)",
+    "rho_pt_over_photon_pt": "rho pT / photon pT",
+    "reco_h_mass_minus_gen_h_mass": "mH(reco) - mH(gen) [GeV]",
+    "reco_rho_mass_minus_gen_rho_mass": "mrho(reco) - mrho(gen) [GeV]",
+    "delta_r_reco_photon_gen_photon": "DeltaR(reco gamma, gen gamma)",
+    "delta_r_reco_pi_plus_gen_pi_plus": "DeltaR(reco pi+, gen pi+)",
+    "delta_r_reco_pi_minus_gen_pi_minus": "DeltaR(reco pi-, gen pi-)",
+    "reco_photon_pt_over_gen_photon_pt": "reco photon pT / gen photon pT",
+    "reco_rho_pt_over_gen_rho_pt": "reco rho pT / gen rho pT",
+    "gen_h_mass": "mH(gen) [GeV]",
+    "gen_rho_mass": "mrho(gen) [GeV]",
+    "gen_photon_pt": "Gen photon pT [GeV]",
+    "gen_rho_pt": "Gen rho pT [GeV]",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,6 +163,19 @@ def numeric_values(rows: list[dict[str, str]], column: str) -> list[float]:
     return values
 
 
+def optional_numeric_values(rows: list[dict[str, str]], column: str) -> list[float]:
+    values = []
+    for index, row in enumerate(rows, start=2):
+        raw = row.get(column, "")
+        if raw == "":
+            continue
+        try:
+            values.append(float(raw))
+        except ValueError as exc:
+            raise ValueError(f"row {index}: column {column} is not numeric: {raw!r}") from exc
+    return values
+
+
 def approximate_quantiles(values: list[float]) -> tuple[float, float, float] | None:
     if not values:
         return None
@@ -146,6 +213,14 @@ def stats_line(column: str, values: list[float]) -> str:
         f"mean={statistics.mean(values):.6f} "
         f"max={max(values):.6f}"
     )
+
+
+def has_truth_columns(fieldnames: list[str]) -> bool:
+    return all(column in fieldnames for column in TRUTH_REQUIRED_COLUMNS)
+
+
+def truth_count(rows: list[dict[str, str]], column: str, value: str) -> int:
+    return sum(1 for row in rows if row.get(column, "").lower() == value)
 
 
 def load_rho_mass_window(config_path: Path | None) -> tuple[float, float] | None:
@@ -232,6 +307,18 @@ def build_summary(
         low, high = rho_mass_window
         lines.append(f"rho_mass_window_config: {low:.6f} < rho_mass < {high:.6f}")
         lines.append(f"rho_mass_window_count: {count_in_window(rho_mass_values, low, high)}")
+    fieldnames = list(rows[0].keys()) if rows else []
+    if has_truth_columns(fieldnames):
+        lines.append("truth_columns: present")
+        lines.append(f"truth_available_count: {truth_count(rows, 'truth_available', '1')}")
+        lines.append(f"truth_matched_count: {truth_count(rows, 'truth_matched', '1')}")
+        for column in TRUTH_SUMMARY_COLUMNS:
+            if column in fieldnames:
+                lines.append(stats_line(column, optional_numeric_values(rows, column)))
+        for filename in TRUTH_EXPECTED_PLOTS:
+            lines.append(f"truth_plot_expected: {filename}")
+    else:
+        lines.append("truth_columns: absent")
     lines.append(f"plots: {plot_status}")
     return "\n".join(lines) + "\n"
 
@@ -251,50 +338,143 @@ def plot_histograms(
     import matplotlib.pyplot as plt
     import numpy as np
     
+    hep_plot_style(plt)
     try:
         import mplhep as hep
-        plt.style.use(hep.style.CMS)
     except ImportError:
         hep = None
 
     written = []
     for column in PLOT_COLUMNS:
         values = numeric_values(rows, column)
-        figure, axis = plt.subplots(figsize=(8.0, 6.0))
+        figure, axis = plt.subplots(figsize=(6.0, 5.0), constrained_layout=True)
         if values:
             bins_count = 100
             if hep:
                 counts, bins = np.histogram(values, bins=bins_count)
-                hep.histplot(counts, bins, ax=axis, histtype="fill", label="Signal")
-                hep.cms.label("Simulation Preliminary", data=False, loc=0, ax=axis)
+                hep.histplot(counts, bins, ax=axis, histtype="step", label="Signal")
+                hep.cms.label("Simulation", data=False, loc=0, ax=axis, fontsize=11)
             else:
-                axis.hist(values, bins=bins_count)
-        axis.set_title(f"{prefix}: {column}")
-        axis.set_xlabel(column)
-        axis.set_ylabel("candidates")
-        figure.tight_layout()
+                axis.hist(values, bins=bins_count, histtype="step", linewidth=1.5)
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(column))
+        axis.set_ylabel("Candidates / bin")
         output = outdir / f"{column}.png"
         figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
         plt.close(figure)
         written.append(output)
     for x_column, y_column, filename in PLOT_2D_COLUMNS:
         x_values = numeric_values(rows, x_column)
         y_values = numeric_values(rows, y_column)
-        figure, axis = plt.subplots(figsize=(8.0, 6.0))
+        figure, axis = plt.subplots(figsize=(6.0, 5.2), constrained_layout=True)
         if x_values and y_values:
             bins_count = 50
             if hep:
                 h, xedges, yedges = np.histogram2d(x_values, y_values, bins=bins_count)
                 hep.hist2dplot(h, xedges, yedges, ax=axis, cmap="viridis")
-                hep.cms.label("Simulation Preliminary", data=False, loc=0, ax=axis)
+                hep.cms.label("Simulation", data=False, loc=0, ax=axis, fontsize=11)
             else:
                 axis.hist2d(x_values, y_values, bins=bins_count)
-        axis.set_title(f"{prefix}: {filename.removesuffix('.png')}")
-        axis.set_xlabel(x_column)
-        axis.set_ylabel(y_column)
-        figure.tight_layout()
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(x_column))
+        axis.set_ylabel(axis_label(y_column))
         output = outdir / filename
         figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
+        plt.close(figure)
+        written.append(output)
+    written.extend(plot_truth(rows, outdir, hep, plt, np))
+    return written
+
+
+def axis_label(column: str) -> str:
+    return AXIS_LABELS.get(column, column)
+
+
+def hep_plot_style(plt) -> None:
+    plt.rcParams.update(
+        {
+            "font.size": 10,
+            "axes.titlesize": 11,
+            "axes.labelsize": 10,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 9,
+            "legend.fontsize": 9,
+            "figure.dpi": 120,
+            "savefig.bbox": "tight",
+        }
+    )
+
+
+def plot_truth(rows, outdir, hep, plt, np) -> list[Path]:
+    if not rows or not has_truth_columns(list(rows[0].keys())):
+        return []
+    written = []
+    truth_values = [row.get("truth_matched", "0") for row in rows]
+    matched = sum(1 for value in truth_values if value == "1")
+    unmatched = len(truth_values) - matched
+    figure, axis = plt.subplots(figsize=(5.0, 4.0), constrained_layout=True)
+    axis.bar(["matched", "unmatched"], [matched, unmatched], color=["#2f6fbb", "#bbbbbb"])
+    axis.set_ylabel("Candidates")
+    axis.set_title("Truth match summary", fontsize=11)
+    output = outdir / "truth_matched_fraction.png"
+    figure.savefig(output)
+    figure.savefig(output.with_suffix(".pdf"))
+    plt.close(figure)
+    written.append(output)
+
+    figure, axis = plt.subplots(figsize=(6.0, 5.0), constrained_layout=True)
+    matched_h = [float(row["h_mass"]) for row in rows if row.get("truth_matched") == "1"]
+    unmatched_h = [float(row["h_mass"]) for row in rows if row.get("truth_matched") != "1"]
+    if matched_h:
+        axis.hist(matched_h, bins=50, histtype="step", linewidth=1.5, label="matched")
+    if unmatched_h:
+        axis.hist(unmatched_h, bins=50, histtype="step", linewidth=1.5, label="unmatched")
+    if matched_h or unmatched_h:
+        axis.legend(frameon=False)
+    axis.set_title("HToRhoGamma signal", fontsize=11)
+    axis.set_xlabel(axis_label("h_mass"))
+    axis.set_ylabel("Candidates / bin")
+    output = outdir / "h_mass_truth_matched_vs_unmatched.png"
+    figure.savefig(output)
+    figure.savefig(output.with_suffix(".pdf"))
+    plt.close(figure)
+    written.append(output)
+
+    fieldnames = list(rows[0].keys())
+    for column in TRUTH_PLOT_COLUMNS:
+        if column not in fieldnames:
+            continue
+        values = optional_numeric_values(rows, column)
+        if not values:
+            continue
+        figure, axis = plt.subplots(figsize=(6.0, 5.0), constrained_layout=True)
+        axis.hist(values, bins=80, histtype="step", linewidth=1.5)
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(column))
+        axis.set_ylabel("Candidates / bin")
+        output = outdir / f"{column}.png"
+        figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
+        plt.close(figure)
+        written.append(output)
+
+    for x_column, y_column, filename in TRUTH_PLOT_2D_COLUMNS:
+        if x_column not in fieldnames or y_column not in fieldnames:
+            continue
+        x_values = optional_numeric_values(rows, x_column)
+        y_values = optional_numeric_values(rows, y_column)
+        if not x_values or len(x_values) != len(y_values):
+            continue
+        figure, axis = plt.subplots(figsize=(6.0, 5.2), constrained_layout=True)
+        axis.hist2d(x_values, y_values, bins=50)
+        axis.set_title("HToRhoGamma signal", fontsize=11)
+        axis.set_xlabel(axis_label(x_column))
+        axis.set_ylabel(axis_label(y_column))
+        output = outdir / filename
+        figure.savefig(output)
+        figure.savefig(output.with_suffix(".pdf"))
         plt.close(figure)
         written.append(output)
     return written
@@ -313,7 +493,7 @@ def main() -> int:
         if not args.no_plots:
             try:
                 written_plots = plot_histograms(rows, args.outdir, args.prefix)
-                plot_status = f"wrote {len(written_plots)} PNG files"
+                plot_status = f"wrote {len(written_plots)} PNG files and {len(written_plots)} PDF files"
             except ImportError:
                 plot_status = "skipped (matplotlib unavailable)"
                 print("plots skipped: matplotlib is not available", file=sys.stderr)
