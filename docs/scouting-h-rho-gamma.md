@@ -297,7 +297,8 @@ The wrapper is intentionally script-level orchestration. It does not change the
 candidate reconstruction, cuts, or branch mapping. It builds the Rust examples
 once, runs the compiled HToRhoGamma executable once per selected file, merges
 the candidate CSVs, optionally writes one combined candidate ROOT skim with the
-compiled CSV-to-ROOT helper, and invokes the CSV plotting script.
+compiled CSV-to-ROOT helper, invokes the CSV plotting script, and writes a
+human-readable `physics_summary.md` report.
 
 Resolve the DAS dataset through the existing `nano-cli`/`nano-das` path:
 
@@ -387,6 +388,10 @@ Useful switches:
 - `--max-events-per-file N`: cap each example invocation.
 - `--skip-existing`: reuse existing per-file CSV/stdout outputs.
 - `--plots-only`: merge and plot existing per-file CSVs.
+- `--report-only`: reuse existing CSV outputs and regenerate the plot summary
+  plus `physics_summary.md` without rerunning ROOT processing.
+- `--report-title "..."`: set the Markdown report title.
+- `--no-physics-report`: skip `physics_summary.md` generation.
 - `--no-root`: skip combined ROOT skim writing.
 - `--no-csv`: skip candidate CSV output and plotting.
 - `--dry-run`: resolve/select files and write the production summary only.
@@ -397,12 +402,15 @@ The deterministic output layout is:
 outputs/scouting_hrhogamma_signal/
 manifest.json
 production_summary.txt
+physics_summary.md
 combined_candidates.csv
 combined_candidates.root
 combined_root.stdout.txt
 combined_root.stderr.txt
 plots.stdout.txt
 plots.stderr.txt
+physics_report.stdout.txt
+physics_report.stderr.txt
 build_scouting_h_rho_gamma.stdout.txt
 build_scouting_h_rho_gamma.stderr.txt
 build_scouting_h_rho_gamma_csv_to_root.stdout.txt
@@ -443,6 +451,16 @@ rows, unique events, duplicate event entries, min/mean/max values, approximate
 `h_mass` and `rho_mass` quantiles, the broad
 `100 < h_mass < 150` count, and the rho-window count from the config when the
 config is readable.
+
+`physics_summary.md` is written automatically when
+`combined_candidates.csv` exists. It records dataset/config provenance, selected
+and successful file counts, total processed events and accepted candidates,
+candidate rate per processed event, candidate-variable summaries for Higgs,
+rho, photon, pion, and angular observables, broad Higgs-window counts, the
+configured rho-window count, a plot index, missing-plot diagnostics, cautious
+interpretation notes, and current limitations. If `matplotlib` is unavailable,
+the report is still written and the plot section states that PNG generation was
+skipped.
 
 ## Known Limitations
 

@@ -118,6 +118,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-csv", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--physics-report",
+        action="store_true",
+        help="explicitly request physics_summary.md; reports are written by default when CSV exists",
+    )
+    parser.add_argument(
+        "--no-physics-report",
+        action="store_true",
+        help="skip physics_summary.md generation",
+    )
+    parser.add_argument(
+        "--report-title",
+        default="HToRhoGamma Signal Physics Report",
+        help="title for physics_summary.md",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="reuse existing CSV outputs and regenerate plots/report without ROOT processing",
+    )
+    parser.add_argument(
         "--release",
         action="store_true",
         help="build and run release example binaries",
@@ -214,8 +234,12 @@ def validate_source_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-events-per-file must be non-negative")
     if args.no_csv and args.plots_only:
         raise ValueError("--plots-only requires CSV input")
+    if args.no_csv and args.report_only:
+        raise ValueError("--report-only requires CSV input")
     if args.no_csv and not args.no_root:
         raise ValueError("--no-csv cannot write a combined ROOT skim")
+    if args.physics_report and args.no_physics_report:
+        raise ValueError("choose at most one of --physics-report or --no-physics-report")
     if args.clean_cache and args.keep_cache:
         raise ValueError("choose at most one of --clean-cache or --keep-cache")
     if args.download_timeout < 1:
@@ -265,7 +289,7 @@ def prepare_binaries(args: argparse.Namespace, outdir: Path) -> Binaries:
     if args.use_cargo_run:
         return Binaries(None, None, "cargo-run")
     mode = target_profile(args)
-    reco = None if args.plots_only else build_example("scouting_h_rho_gamma", args, outdir)
+    reco = None if args.plots_only or args.report_only else build_example("scouting_h_rho_gamma", args, outdir)
     csv_to_root = None
     if not args.no_root and not args.no_csv:
         csv_to_root = build_example("scouting_h_rho_gamma_csv_to_root", args, outdir)
@@ -490,7 +514,7 @@ def run_file(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     plan = effective_input_plan(index, input_file, cache_dir, args.download_remote)
 
-    if args.plots_only:
+    if args.plots_only or args.report_only:
         rows = count_csv_rows(csv_path)
         return FileResult(
             index,
@@ -501,8 +525,8 @@ def run_file(
             0,
             rows,
             rows,
-            "not run (plots-only)",
-            "plots-only",
+            "not run (report-only)" if args.report_only else "not run (plots-only)",
+            "report-only" if args.report_only else "plots-only",
         )
 
     if args.skip_existing and csv_path.exists() and stdout_path.exists():
@@ -659,6 +683,80 @@ def run_plots(args: argparse.Namespace, combined_csv: Path, plots_dir: Path) -> 
     return "requested"
 
 
+def write_physics_report(
+    args: argparse.Namespace,
+    dataset: str,
+    manifest_path: Path | None,
+    inputs: list[InputFile],
+    selected_inputs: list[InputFile],
+    results: list[FileResult],
+    combined_csv: Path,
+    root_status: str,
+    plots_dir: Path,
+    plot_status: str,
+) -> Path | None:
+    if args.no_physics_report or args.no_csv or not combined_csv.exists():
+        return None
+    total_processed = sum(result.processed_events for result in results)
+    total_candidates = sum(result.accepted_candidates for result in results)
+    if args.plots_only or args.report_only:
+        total_candidates = count_csv_rows(combined_csv)
+    successful_files = sum(
+        1 for result in results if result.run_status in {"ok", "skipped", "plots-only", "report-only"}
+    )
+    command = [
+        sys.executable,
+        str(repo_root() / "scripts" / "write_scouting_hrhogamma_report.py"),
+        "--csv",
+        str(combined_csv),
+        "--outdir",
+        str(args.outdir),
+        "--dataset",
+        dataset,
+        "--manifest",
+        str(manifest_path) if manifest_path is not None else "none",
+        "--config",
+        str(args.config),
+        "--selected-files",
+        str(len(selected_inputs)),
+        "--successful-files",
+        str(successful_files),
+        "--failed-files",
+        str(len(results) - successful_files),
+        "--processed-events",
+        str(total_processed),
+        "--accepted-candidates",
+        str(total_candidates),
+        "--combined-root",
+        root_status,
+        "--plots-dir",
+        str(plots_dir),
+        "--plots-status",
+        plot_status,
+        "--command-line",
+        shell_join([sys.executable, *sys.argv]),
+        "--title",
+        args.report_title,
+    ]
+    if dataset == "local-files":
+        command.extend(["--local-files-count", str(len(inputs))])
+    result = subprocess.run(
+        command,
+        cwd=repo_root(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    (args.outdir / "physics_report.stdout.txt").write_text(result.stdout)
+    (args.outdir / "physics_report.stderr.txt").write_text(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "physics report writing failed with "
+            f"exit code {result.returncode}: {shell_join(command)}\n{result.stderr}"
+        )
+    return args.outdir / "physics_summary.md"
+
+
 def write_summary(
     path: Path,
     args: argparse.Namespace,
@@ -678,7 +776,15 @@ def write_summary(
     total_candidates = sum(result.accepted_candidates for result in results)
     if args.plots_only:
         total_candidates = combined_csv_rows
-    mode = "dry-run" if args.dry_run else "plots-only" if args.plots_only else "run"
+    mode = (
+        "dry-run"
+        if args.dry_run
+        else "report-only"
+        if args.report_only
+        else "plots-only"
+        if args.plots_only
+        else "run"
+    )
     lines = [
         "HToRhoGamma signal production summary",
         f"mode: {mode}",
@@ -828,6 +934,18 @@ def main() -> int:
             root_status,
             cache_dir,
         )
+        physics_report = write_physics_report(
+            args,
+            dataset,
+            manifest_path,
+            inputs,
+            selected_inputs,
+            results,
+            combined_csv,
+            root_status,
+            plots_dir,
+            plot_status,
+        )
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -838,6 +956,8 @@ def main() -> int:
     if not args.no_root:
         print(f"combined_root: {outdir / 'combined_candidates.root'}")
     print(f"plots: {plots_dir}")
+    if physics_report is not None:
+        print(f"physics_summary: {physics_report}")
     return 0
 
 
