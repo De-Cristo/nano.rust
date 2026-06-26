@@ -630,6 +630,192 @@ hgamma_reco_h_pt_vs_gen_h_pt.png
 are present. These plots and rates are signal-sample sanity checks for closure
 of the accepted candidate, not a final efficiency or resolution measurement.
 
+## Hgamma Closure Candidate-Quality Study
+
+Stage 16B consumes the Stage 16A hgamma-closure candidate CSV and compares
+closure-matched candidates with photon-matched but non-closed candidates. It is
+a diagnostic study of candidate quality and candidate ranking handles; it does
+not change the production HToRhoGamma reconstruction, cuts, or CSV/ROOT skim
+content.
+
+Run the full local Stage 16B quality study from a completed Stage 16A output:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16b .venv/bin/python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
+  --candidate-csv /tmp/scouting_hrhogamma_signal_stage16a_full_local/combined_candidates.csv \
+  --summary-json /tmp/scouting_hrhogamma_signal_stage16a_full_local/hgamma_closure_summary.json \
+  --outdir /tmp/scouting_hrhogamma_stage16b_quality_full
+```
+
+The script also supports CSV-only summary mode:
+
+```bash
+python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
+  --candidate-csv path/to/combined_candidates.csv \
+  --outdir /tmp/scouting_hrhogamma_stage16b_quality
+```
+
+It writes:
+
+```text
+hgamma_closure_quality_summary.md
+hgamma_closure_quality_summary.json
+plots/
+quality_h_mass_closed_vs_nonclosed.png
+quality_rho_mass_closed_vs_nonclosed.png
+quality_photon_pt_closed_vs_nonclosed.png
+quality_rho_pt_closed_vs_nonclosed.png
+quality_h_pt_closed_vs_nonclosed.png
+quality_delta_r_pipi_closed_vs_nonclosed.png
+quality_delta_r_gamma_rho_closed_vs_nonclosed.png
+quality_rho_pt_over_photon_pt_closed_vs_nonclosed.png
+quality_reco_h_mass_minus_gen_h_mass_closed_vs_nonclosed.png
+quality_delta_r_reco_rho_gen_rho_recoil_closed_vs_nonclosed.png
+quality_scan_rho_mass_window.png
+quality_scan_h_mass_window.png
+quality_scan_delta_r_pipi.png
+quality_scan_rho_pt_over_photon_pt.png
+quality_scan_photon_pt.png
+quality_scan_rho_pt.png
+quality_candidate_multiplicity.png
+quality_closure_fraction_vs_multiplicity.png
+quality_best_candidate_policy_comparison.png
+```
+
+PDF versions are written next to PNGs when matplotlib is available. If
+matplotlib is unavailable, the Markdown and JSON summaries are still written
+and the report records that plots were skipped.
+
+The report splits candidates into:
+
+```text
+all_candidates
+photon_matched_dr0p1
+hgamma_closed_mass15
+photon_matched_but_not_closed_mass15
+not_photon_matched_dr0p1
+```
+
+For each category it summarizes candidate kinematics, closure residuals, and
+response variables with count, min, mean, standard deviation, median, p16, p50,
+p84, and max. It also ranks variables by a simple closed-vs-non-closed
+separation score, scans diagnostic thresholds, reports candidate multiplicity
+by `run/luminosityBlock/event`, and compares simple best-candidate policies.
+
+The threshold scans are intentionally labeled diagnostic. They report closure
+fraction, closed-candidate efficiency, candidate retention, and a simple score
+among photon-matched candidates, but they are not final selection optimization.
+The Stage 16B recommendation points to a next stage:
+
+```text
+Stage 16C: candidate ranking and category proposal
+Stage 16D: background sample support and reco-only comparison
+Stage 16E: signal-region shaping and mass-window strategy
+```
+
+## Hgamma Quality Categories And Focused Plotting
+
+Stage 16C keeps the Stage 16B closure study intact, but adds declarative plot
+profiles and diagnostic candidate-quality categories. The motivation is to keep
+full-range sanity plots for debugging while making physics-discussion plots
+focus on useful ranges such as `80 < h_mass < 180` GeV and
+`0.30 < rho_mass < 1.20` GeV.
+
+The plot policy lives in:
+
+```text
+configs/scouting/h_rho_gamma_plotting.toml
+```
+
+It defines named profiles:
+
+```text
+full_range_sanity
+physics_focus
+signal_window
+```
+
+The diagnostic quality categories live in:
+
+```text
+configs/scouting/h_rho_gamma_quality_categories.toml
+```
+
+The initial categories are:
+
+```text
+inclusive
+photon_matched_reference
+rho_kinematic_good
+rho_topology_tight
+rho_mass_focus
+quality_loose
+quality_medium
+quality_tight
+```
+
+Run the profile-aware Stage 16C study with:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16c .venv/bin/python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
+  --candidate-csv /tmp/scouting_hrhogamma_signal_stage16a_full_local/combined_candidates.csv \
+  --summary-json /tmp/scouting_hrhogamma_signal_stage16a_full_local/hgamma_closure_summary.json \
+  --outdir /tmp/scouting_hrhogamma_stage16c_quality_plotting_full \
+  --plot-config configs/scouting/h_rho_gamma_plotting.toml \
+  --plot-profile physics_focus \
+  --write-full-range-sanity \
+  --quality-config configs/scouting/h_rho_gamma_quality_categories.toml
+```
+
+The output adds:
+
+```text
+range_coverage_summary.md
+range_coverage_summary.json
+hgamma_quality_categories_summary.md
+hgamma_quality_categories_summary.json
+plots/physics_focus/
+plots/full_range_sanity/
+```
+
+Focused ranges always have range coverage accounting:
+
+```text
+variable
+profile
+xmin/xmax
+bins
+n_total
+n_inside
+n_underflow
+n_overflow
+frac_inside
+frac_underflow
+frac_overflow
+```
+
+If a focused range excludes more than the configured threshold, currently
+`10%`, the report writes an explicit warning. This is the guardrail that keeps
+physics-focused plots from silently hiding tails or outliers.
+
+The quality-category config intentionally uses non-tautological reconstructed
+variables such as `rho_pt`, `rho_pt_over_photon_pt`, `delta_r_pipi`,
+`delta_r_gamma_rho`, pion pT, and the rho-mass window. Categories should not
+use `h_mass` or `reco_h_mass_minus_gen_h_mass` as primary definitions because
+the Stage 16A closure label itself is based on Higgs closure. If a config does
+that, the loader emits an anti-circularity warning.
+
+Interpret closure-enriched categories as diagnostic working regions only. They
+are useful for discussing which accepted candidates look cleaner in the signal
+MC, but they are not final optimized cuts and do not change production
+reconstruction, CSV output, ROOT skim output, or the baseline HToRhoGamma cuts.
+
+The design rationale is documented in:
+
+```text
+/home/lzhang/lxplus/scouting/docs/2026-06-26-agentic-framework-physics-focused-plotting-policy.md
+```
+
 ## Charged-Pion Truth-Proxy Diagnosis
 
 Stage 15B adds a diagnostic for understanding why accepted reconstructed pion

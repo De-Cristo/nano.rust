@@ -1,0 +1,63 @@
+[quality_categories.inclusive]
+label = "Inclusive accepted candidates"
+requirements = []
+
+[quality_categories.photon_matched_reference]
+label = "Photon-matched reference"
+requirements = [
+  { variable = "hgamma_photon_matched_dr_0p1", op = "==", value = true },
+]
+
+[quality_categories.rho_kinematic_good]
+label = "Rho kinematic good"
+requirements = [
+  { variable = "rho_pt", op = ">", value = 40.0 },
+  { variable = "rho_pt_over_photon_pt", op = ">", value = 0.4 },
+  { variable = "rho_pt_over_photon_pt", op = "<", value = 1.8 },
+]
+
+[quality_categories.rho_topology_tight]
+label = "Rho topology tight"
+requirements = [
+  { variable = "delta_r_pipi", op = "<", value = 0.10 },
+  { variable = "delta_r_gamma_rho", op = ">", value = 1.0 },
+  { variable = "delta_r_gamma_rho", op = "<", value = 5.0 },
+]
+
+[quality_categories.rho_mass_focus]
+label = "Rho mass focused"
+requirements = [
+  { variable = "rho_mass", op = ">", value = 0.50 },
+  { variable = "rho_mass", op = "<", value = 1.05 },
+]
+
+[quality_categories.quality_loose]
+label = "Quality loose"
+requirements = [
+  { variable = "rho_pt", op = ">", value = 30.0 },
+  { variable = "rho_pt_over_photon_pt", op = ">", value = 0.2 },
+  { variable = "rho_pt_over_photon_pt", op = "<", value = 2.0 },
+  { variable = "delta_r_pipi", op = "<", value = 0.15 },
+]
+
+[quality_categories.quality_medium]
+label = "Quality medium"
+requirements = [
+  { variable = "rho_pt", op = ">", value = 40.0 },
+  { variable = "rho_pt_over_photon_pt", op = ">", value = 0.4 },
+  { variable = "rho_pt_over_photon_pt", op = "<", value = 1.8 },
+  { variable = "delta_r_pipi", op = "<", value = 0.10 },
+  { variable = "rho_mass", op = ">", value = 0.50 },
+  { variable = "rho_mass", op = "<", value = 1.05 },
+]
+
+[quality_categories.quality_tight]
+label = "Quality tight"
+requirements = [
+  { variable = "rho_pt", op = ">", value = 50.0 },
+  { variable = "rho_pt_over_photon_pt", op = ">", value = 0.5 },
+  { variable = "rho_pt_over_photon_pt", op = "<", value = 1.5 },
+  { variable = "delta_r_pipi", op = "<", value = 0.07 },
+  { variable = "rho_mass", op = ">", value = 0.60 },
+  { variable = "rho_mass", op = "<", value = 0.95 },
+]
