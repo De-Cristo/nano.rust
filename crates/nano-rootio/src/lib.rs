@@ -12,6 +12,8 @@ mod parse;
 mod root_file;
 mod tree;
 pub mod write;
+#[cfg(feature = "xrootd")]
+mod xrootd;
 
 pub use error::{Error, Result};
 #[cfg(feature = "http")]

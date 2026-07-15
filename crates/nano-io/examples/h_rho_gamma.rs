@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use nano_core::{BranchSchema, BranchSpec, BranchType};
+use nano_core::{BranchSchema, BranchSpec, BranchType, Event};
 use nano_io::events_chunked;
 use nano_io::h_rho_gamma::{
     hgamma_closure_truth_objects, load_branch_mapping, match_reco_to_hgamma_closure,
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .as_deref()
         .map(|path| CandidateCsvWriter::create(path, options.truth_output()))
         .transpose()?;
-    println!("input: {}", options.input.display());
+    println!("input: {}", options.input);
     println!("max_events: {}", display_limit(options.max_events));
     println!("cut_source: {cut_source}");
     println!(
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[derive(Debug)]
 struct Options {
-    input: PathBuf,
+    input: String,
     max_events: Option<usize>,
     config_path: PathBuf,
     config_display: String,
@@ -170,11 +170,11 @@ impl Options {
 
         let input = if positional.is_empty() {
             match env::var(ENV_INPUT) {
-                Ok(value) => PathBuf::from(value),
+                Ok(value) => value,
                 Err(_) => return Ok(None),
             }
         } else {
-            PathBuf::from(positional.remove(0))
+            positional.remove(0)
         };
 
         let mut max_events = None;
@@ -324,7 +324,7 @@ fn h_rho_gamma_schema(
 }
 
 fn analyze(
-    input: &Path,
+    input: &str,
     schema: &BranchSchema,
     cuts: &HToRhoGammaCuts,
     mapping: &HToRhoGammaBranchMapping,
@@ -334,7 +334,7 @@ fn analyze(
     mut root_writer: Option<&mut CandidateRootWriter>,
 ) -> Result<Report, Box<dyn Error>> {
     let mut report = Report::default();
-    let events = events_chunked(input, schema, CHUNK_SIZE)?;
+    let events = event_stream(input, schema)?;
 
     for event in events {
         if max_events.is_some_and(|limit| report.cutflow.all_events >= limit) {
@@ -543,6 +543,33 @@ fn analyze(
         writer.flush()?;
     }
     Ok(report)
+}
+
+fn event_stream(
+    input: &str,
+    schema: &BranchSchema,
+) -> Result<Box<dyn Iterator<Item = nano_io::Result<Event>>>, Box<dyn Error>> {
+    if is_xrootd_url(input) {
+        #[cfg(feature = "xrootd")]
+        return Ok(Box::new(nano_io::events_xrootd_chunked(
+            input, schema, CHUNK_SIZE,
+        )?));
+
+        #[cfg(not(feature = "xrootd"))]
+        return Err(
+            "XRootD input requires the xrootd feature; rebuild with cargo run -p nano-io --example h_rho_gamma --features xrootd -- root://..."
+                .into(),
+        );
+    }
+    Ok(Box::new(events_chunked(
+        Path::new(input),
+        schema,
+        CHUNK_SIZE,
+    )?))
+}
+
+fn is_xrootd_url(input: &str) -> bool {
+    input.starts_with("root://") || input.starts_with("roots://")
 }
 
 fn nonnegative_count(value: i32, name: &str) -> Result<usize, Box<dyn Error>> {

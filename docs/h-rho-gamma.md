@@ -365,8 +365,7 @@ python scripts/run_h_rho_gamma_signal.py \
   --all-files
 ```
 
-Native `root://` reading is not implemented in the current Rust ROOT reader.
-For DAS/XRootD production, ask the script to cache remote files locally before
+The default portable DAS/XRootD path caches remote files locally before
 processing:
 
 ```bash
@@ -382,10 +381,33 @@ python scripts/run_h_rho_gamma_signal.py \
 ```
 
 Remote inputs beginning with `root://` or `/store/` require
-`--download-remote`. A `/store/...` LFN is converted to the global redirector
+either `--download-remote` or `--direct-xrootd`. A `/store/...` LFN is converted to the global redirector
 form `root://cms-xrd-global.cern.ch//store/...` for `xrdcp`. Cached files are
 named deterministically from the file index, a short hash of the remote source,
 and the source basename, so repeated runs can reuse non-empty cache files.
+
+For direct byte-range reads without a local ROOT cache, use the native XRootD
+client feature:
+
+```bash
+python scripts/run_h_rho_gamma_signal.py \
+  --dataset /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal_direct \
+  --resolve-das \
+  --xrootd \
+  --direct-xrootd \
+  --max-files 1 \
+  --max-events-per-file 100
+```
+
+`--direct-xrootd` builds `h_rho_gamma` with `nano-io`'s optional `xrootd`
+feature. It uses the native `XrdCl` client, which discovers the same CMS
+credential plugins and proxy/token environment used by `xrdcp`. Building that
+feature requires the XRootD development packages in addition to the runtime
+client (for example, `xrootd-devel` and `xrootd-client-devel` on RPM-based
+systems). `--download-remote` remains the fallback for machines without those
+development headers.
 
 Useful switches:
 
@@ -397,6 +419,8 @@ Useful switches:
 - `--xrootd`: use manifest global XRootD URLs instead of local paths/LFNs.
 - `--download-remote`: copy `root://` or `/store/` inputs into the local cache
   before running the Rust reader.
+- `--direct-xrootd`: read `root://` or `/store/` inputs through the optional
+  native XRootD client, without creating a local ROOT cache.
 - `--cache-dir path`: choose the cache directory; defaults to
   `<outdir>/cache`.
 - `--download-tool xrdcp`: choose the remote copy command.
@@ -1012,9 +1036,10 @@ the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
   replacement for a final histogramming or statistical workflow.
 - DAS access depends on the local `dasgoclient`/grid environment used by
   `nano-cli dataset resolve`.
-- Native remote ROOT reading is not implemented in `nano-rootio`; DAS/XRootD
-  production currently depends on `xrdcp`-style local caching with valid grid
-  credentials and reachable redirectors.
+- Direct remote ROOT reading is optional and requires the native XRootD client
+  feature plus its development headers; otherwise DAS/XRootD production uses
+  `xrdcp`-style local caching with valid grid credentials and reachable
+  redirectors.
 - Track-quality cuts using `dz`, `dxy`, or object quality flags are deferred
   because those branches were not part of the confirmed local branch set.
 - Truth-proxy matching uses nearest GenPart charged pions because the local

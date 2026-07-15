@@ -231,6 +231,20 @@ pub fn events_url_chunked_from_tree_with_options(
     reader::EventIterator::new_remote_file(file, url, tree_name, schema, chunk_size)
 }
 
+/// Stream the `Events` TTree from an XRootD URL with an explicit chunk size.
+///
+/// The native XRootD client discovers authentication plugins and credentials
+/// from its process environment, matching the behavior of `xrdcp`.
+#[cfg(feature = "xrootd")]
+pub fn events_xrootd_chunked(
+    url: &str,
+    schema: &BranchSchema,
+    chunk_size: usize,
+) -> Result<reader::EventIterator> {
+    let file = nano_rootio::RootFile::open_xrootd(url)?;
+    reader::EventIterator::new_remote_file(file, url, "Events", schema, chunk_size)
+}
+
 pub mod reader {
     use std::path::Path;
     use std::sync::Arc;
@@ -248,7 +262,7 @@ pub mod reader {
         Local {
             tree: Tree,
         },
-        #[cfg(feature = "http")]
+        #[cfg(any(feature = "http", feature = "xrootd"))]
         Remote {
             file: RootFile,
             tree: Tree,
@@ -293,7 +307,7 @@ pub mod reader {
             })
         }
 
-        #[cfg(feature = "http")]
+        #[cfg(any(feature = "http", feature = "xrootd"))]
         pub fn new_remote_file(
             file: RootFile,
             source_label: &str,
@@ -321,7 +335,7 @@ pub mod reader {
         pub fn bytes_fetched(&self) -> u64 {
             match &self.backend {
                 EventIteratorBackend::Local { .. } => 0,
-                #[cfg(feature = "http")]
+                #[cfg(any(feature = "http", feature = "xrootd"))]
                 EventIteratorBackend::Remote { file, .. } => file.bytes_fetched(),
             }
         }
@@ -344,7 +358,7 @@ pub mod reader {
                 EventIteratorBackend::Local { tree } => {
                     read_columns_window(tree, self.schema.specs(), start, len)?
                 }
-                #[cfg(feature = "http")]
+                #[cfg(any(feature = "http", feature = "xrootd"))]
                 EventIteratorBackend::Remote { tree, .. } => {
                     read_columns_window(tree, self.schema.specs(), start, len)?
                 }

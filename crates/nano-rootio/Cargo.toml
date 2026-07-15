@@ -19,6 +19,7 @@ url = { version = "2", optional = true }
 [features]
 default = []
 http = ["dep:rustls", "dep:rustls-pemfile", "dep:ureq", "dep:url"]
+xrootd = []
 
 [dev-dependencies]
 futures = "0.3"

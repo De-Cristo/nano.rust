@@ -19,6 +19,7 @@ serde_yaml = "0.9"
 [features]
 default = []
 http = ["nano-rootio/http"]
+xrootd = ["nano-rootio/xrootd"]
 # To test unreleased kuva fixes, repoint `kuva` to a git fork here or with
 # a workspace-level [patch.crates-io] entry.
 plot = ["dep:kuva"]

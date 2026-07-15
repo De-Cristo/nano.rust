@@ -26,8 +26,7 @@ DEFAULT_DOWNLOAD_TOOL = "xrdcp"
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 3600
 GLOBAL_XROOTD_HOST = "root://cms-xrd-global.cern.ch/"
 REMOTE_READING_UNSUPPORTED = (
-    "remote ROOT reading is not supported by the current Rust reader; "
-    "rerun with --download-remote to cache files locally first"
+    "remote ROOT input requires --direct-xrootd or --download-remote"
 )
 CSV_HEADER = (
     "run,luminosityBlock,event,photon_pt,photon_eta,photon_phi,"
@@ -199,6 +198,11 @@ def parse_args() -> argparse.Namespace:
         help="copy root:// or /store inputs into --cache-dir before reading",
     )
     parser.add_argument(
+        "--direct-xrootd",
+        action="store_true",
+        help="read root:// or /store inputs through nano-rootio's optional XRootD client",
+    )
+    parser.add_argument(
         "--download-tool",
         default=DEFAULT_DOWNLOAD_TOOL,
         help="remote copy tool, normally xrdcp",
@@ -284,6 +288,8 @@ def validate_source_args(args: argparse.Namespace) -> None:
         raise ValueError("choose at most one of --physics-report or --no-physics-report")
     if args.clean_cache and args.keep_cache:
         raise ValueError("choose at most one of --clean-cache or --keep-cache")
+    if args.download_remote and args.direct_xrootd:
+        raise ValueError("choose at most one of --download-remote or --direct-xrootd")
     if args.download_timeout < 1:
         raise ValueError("--download-timeout must be positive")
     if args.no_build and args.use_cargo_run:
@@ -298,7 +304,13 @@ def example_binary(name: str, args: argparse.Namespace) -> Path:
     return repo_root() / "target" / target_profile(args) / "examples" / name
 
 
-def build_example(name: str, args: argparse.Namespace, outdir: Path) -> Path:
+def build_example(
+    name: str,
+    args: argparse.Namespace,
+    outdir: Path,
+    *,
+    xrootd: bool = False,
+) -> Path:
     binary = example_binary(name, args)
     if args.no_build:
         if not binary.exists():
@@ -306,6 +318,8 @@ def build_example(name: str, args: argparse.Namespace, outdir: Path) -> Path:
         return binary
 
     command = ["cargo", "build", "-p", "nano-io", "--example", name]
+    if xrootd:
+        command.extend(["--features", "xrootd"])
     if args.release:
         command.append("--release")
     result = subprocess.run(
@@ -331,7 +345,11 @@ def prepare_binaries(args: argparse.Namespace, outdir: Path) -> Binaries:
     if args.use_cargo_run:
         return Binaries(None, None, "cargo-run")
     mode = target_profile(args)
-    reco = None if args.plots_only or args.report_only else build_example("h_rho_gamma", args, outdir)
+    reco = (
+        None
+        if args.plots_only or args.report_only
+        else build_example("h_rho_gamma", args, outdir, xrootd=args.direct_xrootd)
+    )
     csv_to_root = None
     if not args.no_root and not args.no_csv:
         csv_to_root = build_example("h_rho_gamma_csv_to_root", args, outdir)
@@ -365,11 +383,20 @@ def effective_input_plan(
     input_file: InputFile,
     cache_dir: Path,
     download_remote: bool,
+    direct_xrootd: bool = False,
 ) -> InputPlan:
     if not is_remote_input(input_file.path):
         return InputPlan(
             original_input=input_file.path,
             run_input=input_file.path,
+            cached_input=None,
+            download_source=None,
+        )
+    remote_url = remote_source_for_download(input_file.path)
+    if direct_xrootd:
+        return InputPlan(
+            original_input=input_file.path,
+            run_input=remote_url,
             cached_input=None,
             download_source=None,
         )
@@ -380,7 +407,7 @@ def effective_input_plan(
         original_input=input_file.path,
         run_input=str(cached_input),
         cached_input=cached_input,
-        download_source=remote_source_for_download(input_file.path),
+        download_source=remote_url,
     )
 
 
@@ -548,6 +575,8 @@ def reco_command(
 ) -> list[str]:
     if args.use_cargo_run:
         command = ["cargo", "run", "-p", "nano-io", "--example", "h_rho_gamma"]
+        if getattr(args, "direct_xrootd", False):
+            command.extend(["--features", "xrootd"])
         if args.release:
             command.append("--release")
         command.extend(["--", run_input])
@@ -578,7 +607,13 @@ def run_file(
 ) -> FileResult:
     stdout_path, csv_path = per_file_paths(outdir, index, args.per_file_dir or per_file_dir)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    plan = effective_input_plan(index, input_file, cache_dir, args.download_remote)
+    plan = effective_input_plan(
+        index,
+        input_file,
+        cache_dir,
+        args.download_remote,
+        args.direct_xrootd,
+    )
 
     if args.plots_only or args.report_only:
         rows = count_csv_rows(csv_path)
@@ -614,7 +649,11 @@ def run_file(
         )
 
     download_status = download_remote_input(args, plan, index, outdir)
-    if plan.cached_input is None and not Path(plan.run_input).exists():
+    if (
+        plan.cached_input is None
+        and not is_remote_input(plan.run_input)
+        and not Path(plan.run_input).exists()
+    ):
         raise FileNotFoundError(f"input file does not exist: {plan.run_input}")
 
     command = reco_command(args, binaries, plan.run_input, csv_path)
@@ -1020,6 +1059,7 @@ def write_summary(
         f"build_mode: {binaries.build_mode}",
         f"cache_dir: {cache_dir}",
         f"download_remote: {args.download_remote}",
+        f"direct_xrootd: {args.direct_xrootd}",
         f"download_tool: {args.download_tool}",
         f"download_timeout: {args.download_timeout}",
         f"cache_policy: {'clean after successful file' if args.clean_cache else 'keep cached files'}",
@@ -1094,7 +1134,13 @@ def main() -> int:
 
         selected_inputs = select_inputs(inputs, limit)
         input_plans = [
-            effective_input_plan(index, input_file, cache_dir, args.download_remote)
+            effective_input_plan(
+                index,
+                input_file,
+                cache_dir,
+                args.download_remote,
+                args.direct_xrootd,
+            )
             for index, input_file in enumerate(selected_inputs, start=1)
         ]
         print(f"resolved files: {len(inputs)}")

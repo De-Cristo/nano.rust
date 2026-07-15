@@ -98,8 +98,7 @@ class HToRhoGammaSignalTest(unittest.TestCase):
     def test_remote_without_download_fails_clearly(self):
         with self.assertRaisesRegex(
             ValueError,
-            "remote ROOT reading is not supported by the current Rust reader; "
-            "rerun with --download-remote to cache files locally first",
+            "remote ROOT input requires --direct-xrootd or --download-remote",
         ):
             run_signal.effective_input_plan(
                 1,
@@ -120,6 +119,20 @@ class HToRhoGammaSignalTest(unittest.TestCase):
         self.assertEqual(plan.download_source, "root://cms-xrd-global.cern.ch//store/mc/file.root")
         self.assertEqual(plan.run_input, str(plan.cached_input))
         self.assertTrue(str(plan.cached_input).startswith("/tmp/cache/file_000001_"))
+
+    def test_remote_with_direct_xrootd_uses_remote_url_without_cache(self):
+        plan = run_signal.effective_input_plan(
+            1,
+            run_signal.InputFile("file_000001", "/store/mc/file.root"),
+            Path("/tmp/cache"),
+            download_remote=False,
+            direct_xrootd=True,
+        )
+
+        self.assertEqual(plan.original_input, "/store/mc/file.root")
+        self.assertEqual(plan.run_input, "root://cms-xrd-global.cern.ch//store/mc/file.root")
+        self.assertIsNone(plan.cached_input)
+        self.assertIsNone(plan.download_source)
 
     def test_reco_command_forwards_hgamma_closure_truth_strategy(self):
         args = run_signal.argparse.Namespace(
@@ -213,7 +226,7 @@ class HToRhoGammaSignalTest(unittest.TestCase):
             self.assertIn("cached_input=", text)
             self.assertIn("download_source=root://", text)
 
-    def test_remote_dry_run_without_download_fails_clearly(self):
+    def test_remote_dry_run_without_transport_fails_clearly(self):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp) / "signal"
             result = subprocess.run(
@@ -237,10 +250,38 @@ class HToRhoGammaSignalTest(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "remote ROOT reading is not supported by the current Rust reader; "
-                "rerun with --download-remote to cache files locally first",
+                "remote ROOT input requires --direct-xrootd or --download-remote",
                 result.stderr,
             )
+
+    def test_remote_direct_xrootd_dry_run_records_remote_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "signal"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--manifest",
+                    str(MANIFEST),
+                    "--outdir",
+                    str(outdir),
+                    "--max-files",
+                    "1",
+                    "--xrootd",
+                    "--direct-xrootd",
+                    "--dry-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (outdir / "production_summary.txt").read_text()
+            self.assertIn("direct_xrootd: True", text)
+            self.assertIn("run_input=root://", text)
+            self.assertIn("cached_input=none", text)
 
     def test_merge_command_keeps_one_header_and_writes_summary(self):
         with tempfile.TemporaryDirectory() as tmp:

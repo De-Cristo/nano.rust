@@ -4,6 +4,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "xrootd")]
+use std::sync::Mutex;
 
 #[cfg(feature = "http")]
 use std::io::BufReader;
@@ -46,6 +48,8 @@ enum SourceInner {
         agent: Agent,
         url: Url,
     },
+    #[cfg(feature = "xrootd")]
+    Xrootd(Arc<Mutex<crate::xrootd::XrootdFile>>),
 }
 
 impl fmt::Debug for Source {
@@ -63,6 +67,8 @@ impl fmt::Debug for SourceInner {
             Self::Local(path) => f.debug_tuple("Local").field(path).finish(),
             #[cfg(feature = "http")]
             Self::Http { url, .. } => f.debug_struct("Http").field("url", url).finish(),
+            #[cfg(feature = "xrootd")]
+            Self::Xrootd(_) => f.debug_tuple("Xrootd").finish(),
         }
     }
 }
@@ -136,6 +142,25 @@ impl Source {
         })
     }
 
+    /// Build an XRootD byte-range source using the credential plugins configured
+    /// for the native XRootD client.
+    #[cfg(feature = "xrootd")]
+    pub fn xrootd(url: &str) -> Result<Self> {
+        if !matches!(
+            url.split_once("://").map(|(scheme, _)| scheme),
+            Some("root") | Some("roots")
+        ) {
+            return Err(Error::unsupported(
+                "XRootD ROOT source",
+                format!("requires root:// or roots:// URL, got `{url}`"),
+            ));
+        }
+        Ok(Self {
+            inner: SourceInner::Xrootd(Arc::new(Mutex::new(crate::xrootd::XrootdFile::open(url)?))),
+            bytes_fetched: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
     /// Bytes returned by this source's fetches. Clones share the same counter.
     pub fn bytes_fetched(&self) -> u64 {
         self.bytes_fetched.load(Ordering::Relaxed)
@@ -157,6 +182,11 @@ impl Source {
             }
             #[cfg(feature = "http")]
             SourceInner::Http { agent, url } => fetch_http(agent, url, offset, len as u64)?,
+            #[cfg(feature = "xrootd")]
+            SourceInner::Xrootd(file) => file
+                .lock()
+                .map_err(|_| Error::unsupported("XRootD ROOT source", "client lock poisoned"))?
+                .read(offset, len as u64)?,
         };
         self.bytes_fetched
             .fetch_add(out.len() as u64, Ordering::Relaxed);
@@ -436,6 +466,12 @@ impl RootFile {
     #[cfg(feature = "http")]
     pub fn open_url_with_options(url: &str, options: HttpSourceOptions) -> Result<Self> {
         Self::from_source(Source::http_with_options(url, options)?)
+    }
+
+    /// Open a ROOT file through the native XRootD client.
+    #[cfg(feature = "xrootd")]
+    pub fn open_xrootd(url: &str) -> Result<Self> {
+        Self::from_source(Source::xrootd(url)?)
     }
 
     /// Open a ROOT file from an existing byte-range source.
