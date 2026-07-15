@@ -185,14 +185,14 @@ impl HToRhoGammaBranchMapping {
     pub fn zcountinghlt_naive() -> Self {
         Self {
             photon: PhotonBranches {
-                semantic_name: "ScoutingPhoton".to_string(),
+                semantic_name: "Photon".to_string(),
                 count: "nPhoton".to_string(),
                 pt: "Photon_pt".to_string(),
                 eta: "Photon_eta".to_string(),
                 phi: "Photon_phi".to_string(),
             },
             charged_candidate: ChargedCandidateBranches {
-                semantic_name: "ScoutingChargedCandidate".to_string(),
+                semantic_name: "ChargedCandidate".to_string(),
                 count: "nPFCand".to_string(),
                 pt: "PFCand_pt".to_string(),
                 eta: "PFCand_eta".to_string(),
@@ -1540,13 +1540,13 @@ higgs_mass_reference = 125.0
     fn loads_branch_mapping_from_yaml() {
         let config_toml = r#"
 [analysis]
-branch_catalogue = "configs/branches/scouting_run3.yaml"
+branch_catalogue = "configs/branches/h_rho_gamma_nanov15.yaml"
 
 [objects.photon]
-source = "ScoutingPhoton"
+source = "Photon"
 
 [objects.charged_candidate]
-source = "ScoutingChargedCandidate"
+source = "ChargedCandidate"
 
 [baseline.zcountinghlt_naive]
 photon_min_pt = 15.0
@@ -1570,13 +1570,10 @@ higgs_mass_reference = 125.0
         std::fs::write(&config_path, config_toml).unwrap();
 
         let (source, mapping) = load_branch_mapping(&config_path).expect("load branch mapping");
-        assert_eq!(source, "configs/branches/scouting_run3.yaml");
-        assert_eq!(mapping.photon.semantic_name, "ScoutingPhoton");
+        assert_eq!(source, "configs/branches/h_rho_gamma_nanov15.yaml");
+        assert_eq!(mapping.photon.semantic_name, "Photon");
         assert_eq!(mapping.photon.count, "nPhoton");
-        assert_eq!(
-            mapping.charged_candidate.semantic_name,
-            "ScoutingChargedCandidate"
-        );
+        assert_eq!(mapping.charged_candidate.semantic_name, "ChargedCandidate");
         assert_eq!(mapping.charged_candidate.pdg_id, "PFCand_pdgId");
     }
 
@@ -1584,13 +1581,13 @@ higgs_mass_reference = 125.0
     fn missing_catalogue_object_fails() {
         let config_toml = r#"
 [analysis]
-branch_catalogue = "configs/branches/scouting_run3.yaml"
+branch_catalogue = "configs/branches/h_rho_gamma_nanov15.yaml"
 
 [objects.photon]
 source = "MissingPhoton"
 
 [objects.charged_candidate]
-source = "ScoutingChargedCandidate"
+source = "ChargedCandidate"
 
 [baseline.zcountinghlt_naive]
 photon_min_pt = 15.0
@@ -1626,7 +1623,7 @@ higgs_mass_reference = 125.0
 
     #[test]
     fn committed_config_matches_builtin_zcountinghlt_naive_cuts() {
-        let config = include_str!("../../../configs/scouting/h_rho_gamma.toml");
+        let config = include_str!("../../../configs/h_rho_gamma.toml");
         let cuts = HToRhoGammaCuts::from_config_toml_str(config).expect("parse committed config");
         assert_eq!(cuts, default_cuts());
     }

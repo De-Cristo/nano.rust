@@ -4,11 +4,11 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
-fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
-    let input = match env::var("NANO_SCOUTING_HRHOGAMMA_FILE") {
+fn h_rho_gamma_example_runs_on_local_file_if_present() {
+    let input = match env::var("NANO_H_RHO_GAMMA_FILE") {
         Ok(value) => value,
         Err(_) => {
-            eprintln!("SKIP: NANO_SCOUTING_HRHOGAMMA_FILE not set");
+            eprintln!("SKIP: NANO_H_RHO_GAMMA_FILE not set");
             return;
         }
     };
@@ -17,7 +17,7 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
         return;
     }
     let csv_path = env::temp_dir().join(format!(
-        "scouting_h_rho_gamma_example_{}_{}.csv",
+        "h_rho_gamma_example_{}_{}.csv",
         std::process::id(),
         "candidates"
     ));
@@ -33,7 +33,7 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
             "-p",
             "nano-io",
             "--example",
-            "scouting_h_rho_gamma",
+            "h_rho_gamma",
             "--quiet",
             "--",
             &input,
@@ -43,7 +43,7 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("run scouting_h_rho_gamma example");
+        .expect("run h_rho_gamma example");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -56,9 +56,7 @@ fn scouting_h_rho_gamma_example_runs_on_local_file_if_present() {
     );
     assert!(stdout.contains("input: "), "stdout:\n{stdout}");
     assert!(
-        stdout.contains(
-            "cut_source: configs/scouting/h_rho_gamma.toml [baseline.zcountinghlt_naive]"
-        ),
+        stdout.contains("cut_source: configs/h_rho_gamma.toml [baseline.zcountinghlt_naive]"),
         "stdout:\n{stdout}"
     );
     assert!(stdout.contains("branch_schema: ok"), "stdout:\n{stdout}");

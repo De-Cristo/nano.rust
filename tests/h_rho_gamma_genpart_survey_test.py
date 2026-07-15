@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "survey_hrhogamma_genpart_topology.py"
+SCRIPT = REPO_ROOT / "scripts" / "survey_h_rho_gamma_genpart_topology.py"
 
 SPEC = importlib.util.spec_from_file_location("survey_genpart", SCRIPT)
 survey_genpart = importlib.util.module_from_spec(SPEC)
@@ -44,7 +44,7 @@ class HToRhoGammaGenPartSurveyTest(unittest.TestCase):
 
     def test_command_includes_max_events_and_output_paths(self):
         command = survey_genpart.survey_command(
-            Path("/repo/target/debug/examples/scouting_h_rho_gamma_genpart_survey"),
+            Path("/repo/target/debug/examples/h_rho_gamma_genpart_survey"),
             Path("/tmp/input.root"),
             Path("/tmp/out/file_000001.summary.json"),
             Path("/tmp/out/file_000001.examples.txt"),
@@ -52,7 +52,7 @@ class HToRhoGammaGenPartSurveyTest(unittest.TestCase):
             examples=3,
         )
 
-        self.assertEqual(command[0], "/repo/target/debug/examples/scouting_h_rho_gamma_genpart_survey")
+        self.assertEqual(command[0], "/repo/target/debug/examples/h_rho_gamma_genpart_survey")
         self.assertIn("/tmp/input.root", command)
         self.assertIn("1000", command)
         self.assertIn("--out-json", command)

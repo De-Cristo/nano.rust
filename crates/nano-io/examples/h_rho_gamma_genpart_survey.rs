@@ -76,7 +76,7 @@ impl Options {
         let input = args
             .next()
             .map(PathBuf::from)
-            .ok_or("usage: scouting_h_rho_gamma_genpart_survey <input.root> [max-events] [--out-json path] [--out-text path] [--out-examples path] [--examples N]")?;
+            .ok_or("usage: h_rho_gamma_genpart_survey <input.root> [max-events] [--out-json path] [--out-text path] [--out-examples path] [--examples N]")?;
         let mut max_events = None;
         let mut out_json = None;
         let mut out_text = None;

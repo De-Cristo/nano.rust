@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "run_scouting_hrhogamma_signal.py"
-FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal"
+SCRIPT = REPO_ROOT / "scripts" / "run_h_rho_gamma_signal.py"
+FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_signal"
 PER_FILE_DIR = FIXTURE_DIR / "per_file"
 MANIFEST = FIXTURE_DIR / "manifest.json"
 
@@ -20,7 +20,7 @@ sys.modules["run_signal"] = run_signal
 SPEC.loader.exec_module(run_signal)
 
 
-class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
+class HToRhoGammaSignalTest(unittest.TestCase):
     def test_remote_detection_recognizes_root_urls_and_store_lfns(self):
         self.assertTrue(run_signal.is_remote_input("root://cms-xrd-global.cern.ch//store/a.root"))
         self.assertTrue(run_signal.is_remote_input("/store/mc/a.root"))
@@ -126,14 +126,14 @@ class ScoutingHToRhoGammaSignalTest(unittest.TestCase):
             use_cargo_run=False,
             release=False,
             max_events_per_file=100,
-            config=Path("configs/scouting/h_rho_gamma.toml"),
+            config=Path("configs/h_rho_gamma.toml"),
             no_csv=False,
             truth=True,
             truth_strategy="hgamma-closure",
         )
         binaries = run_signal.Binaries(
-            Path("target/debug/examples/scouting_h_rho_gamma"),
-            Path("target/debug/examples/scouting_h_rho_gamma_csv_to_root"),
+            Path("target/debug/examples/h_rho_gamma"),
+            Path("target/debug/examples/h_rho_gamma_csv_to_root"),
             "debug",
         )
 

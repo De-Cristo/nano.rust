@@ -7,18 +7,18 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "plot_scouting_hrhogamma_csv.py"
-FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
-TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
+SCRIPT = REPO_ROOT / "scripts" / "plot_h_rho_gamma_csv.py"
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_small.csv"
+TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_truth_small.csv"
 TRUTH_PROXY_FIXTURE = (
-    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
+    REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_truth_proxy_small.csv"
 )
 HGAMMA_CLOSURE_FIXTURE = (
-    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_hgamma_closure_small.csv"
+    REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_hgamma_closure_small.csv"
 )
 
 
-class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
+class HToRhoGammaCsvTest(unittest.TestCase):
     def test_writes_summary_without_plots(self):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp) / "plots"
@@ -159,7 +159,7 @@ class ScoutingHToRhoGammaCsvTest(unittest.TestCase):
             self.assertTrue((outdir / "hgamma_reco_rho_mass_vs_gen_rho_recoil_mass.png").exists())
 
     def test_hep_style_configuration_helper_is_plain_matplotlib_safe(self):
-        script = (REPO_ROOT / "scripts" / "plot_scouting_hrhogamma_csv.py").read_text()
+        script = (REPO_ROOT / "scripts" / "plot_h_rho_gamma_csv.py").read_text()
         self.assertIn("def hep_plot_style", script)
         self.assertIn("histtype=\"step\"", script)
         self.assertIn(".pdf", script)

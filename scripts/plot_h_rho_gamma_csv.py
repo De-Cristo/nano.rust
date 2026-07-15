@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize and optionally plot H->rho gamma scouting candidate CSV files."""
+"""Summarize and optionally plot H->rho gamma offline NanoAOD candidates."""
 
 from __future__ import annotations
 
@@ -222,16 +222,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Summarize and plot Stage-7 HToRhoGamma candidate CSV output."
     )
-    parser.add_argument("csv_path", type=Path, help="candidate CSV from scouting_h_rho_gamma")
+    parser.add_argument("csv_path", type=Path, help="candidate CSV from h_rho_gamma")
     parser.add_argument(
         "--outdir",
         type=Path,
-        default=Path("plots/scouting_hrhogamma"),
+        default=Path("plots/h_rho_gamma"),
         help="directory for summary.txt and PNG plots",
     )
     parser.add_argument(
         "--prefix",
-        default="scouting_hrhogamma",
+        default="h_rho_gamma",
         help="label used in plot titles and summary metadata",
     )
     parser.add_argument(

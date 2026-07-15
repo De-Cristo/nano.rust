@@ -1,14 +1,14 @@
-# Independent Run-3 scouting H -> rho gamma example configuration.
+# Independent Run-3 offline NanoAOD H -> rho gamma example configuration.
 #
 # This file is intentionally separate from normal NanoAOD examples such as
-# configs/higgs4l.toml. The scouting branch catalogue is expected to be
-# developed after inspecting real files from the signal dataset below.
+# configs/higgs4l.toml. The analysis-specific branch mapping records the
+# NanoAODv15 fields used by the signal dataset below.
 
 [analysis]
-name = "scouting_h_rho_gamma"
+name = "h_rho_gamma"
 era = "Run3"
 channel = "HToRhoGamma"
-branch_catalogue = "configs/branches/scouting_run3.yaml"
+branch_catalogue = "configs/branches/h_rho_gamma_nanov15.yaml"
 
 [baseline.zcountinghlt_naive]
 # Naive cut-based baseline translated from ZCountingHLT/python/higgs_rho_cfg.py.
@@ -33,15 +33,16 @@ instance = "prod/global"
 max_files_for_demo = 5
 
 [objects.photon]
-# Semantic scouting object alias. The concrete branch mapping belongs in
-# configs/branches/scouting_run3.yaml after the branch survey is complete.
-source = "ScoutingPhoton"
+# Semantic offline NanoAOD object alias. The concrete branch mapping belongs in
+# configs/branches/h_rho_gamma_nanov15.yaml.
+source = "Photon"
 min_pt = 35.0
 max_abs_eta = 2.5
 
 [objects.charged_candidate]
-# Semantic scouting object alias for the charged pair used to build rho -> pi+ pi-.
-source = "ScoutingChargedCandidate"
+# Semantic offline NanoAOD object alias for the charged pair used to build
+# rho -> pi+ pi-.
+source = "ChargedCandidate"
 min_pt_leading = 20.0
 min_pt_subleading = 5.0
 max_abs_eta = 2.5

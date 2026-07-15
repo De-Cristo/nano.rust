@@ -150,7 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.len() != 2 || args.iter().any(|arg| arg == "-h" || arg == "--help") {
         println!(
-            "usage: scouting_h_rho_gamma_csv_to_root <combined_candidates.csv> <combined_candidates.root>"
+            "usage: h_rho_gamma_csv_to_root <combined_candidates.csv> <combined_candidates.root>"
         );
         return Ok(());
     }

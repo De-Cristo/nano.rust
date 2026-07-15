@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_OUTDIR = Path("outputs/scouting_hrhogamma_pion_truth_diag")
+DEFAULT_OUTDIR = Path("outputs/h_rho_gamma_pion_truth_diag")
 DEFAULT_SAFE_MAX_FILES = 5
 THRESHOLDS = ("0.05", "0.10", "0.20", "0.30", "0.50")
 POOLS = (
@@ -126,11 +126,11 @@ def group_candidates_by_event(
 
 def diag_binary(release: bool) -> Path:
     profile = "release" if release else "debug"
-    return repo_root() / "target" / profile / "examples" / "scouting_h_rho_gamma_pion_truth_diag"
+    return repo_root() / "target" / profile / "examples" / "h_rho_gamma_pion_truth_diag"
 
 
 def build_binary(release: bool) -> Path:
-    command = ["cargo", "build", "-p", "nano-io", "--example", "scouting_h_rho_gamma_pion_truth_diag"]
+    command = ["cargo", "build", "-p", "nano-io", "--example", "h_rho_gamma_pion_truth_diag"]
     if release:
         command.append("--release")
     result = subprocess.run(

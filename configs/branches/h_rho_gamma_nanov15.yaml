@@ -1,9 +1,9 @@
-# Run-3 Scouting Branch Catalogue
-# This maps semantic scouting objects to the actual branch names found in the dataset:
+# Run-3 HToRhoGamma NanoAODv15 Branch Mapping
+# This maps the analysis object aliases to actual offline NanoAOD branches in:
 # /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM
 
 objects:
-  ScoutingPhoton:
+  Photon:
     count: nPhoton
     fields:
       pt: Photon_pt
@@ -11,7 +11,7 @@ objects:
       phi: Photon_phi
       # Note: mass is assumed to be 0 as Photon_mass is absent
 
-  ScoutingChargedCandidate:
+  ChargedCandidate:
     count: nPFCand
     fields:
       pt: PFCand_pt

@@ -1,10 +1,18 @@
-# Run-3 Scouting H -> rho gamma Demo
+# Run-3 Offline NanoAOD H -> rho gamma Demo
 
-This page documents the `nano-io` `scouting_h_rho_gamma` example. It is a
-Run-3 scouting-oriented `H -> rho gamma` demonstrator over local
-NanoAODv15-like signal MC. It is not a full scouting analysis, not a trigger
+This page documents the `nano-io` `h_rho_gamma` example. It is a
+Run-3 offline NanoAOD-oriented `H -> rho gamma` demonstrator over local
+NanoAODv15-like signal MC. It is not a full physics analysis, not a trigger
 efficiency study, and not a reproduction of a published `H -> rho/phi/K*
 gamma` analysis.
+
+In the Stage 17A framework boundary, this page describes an analysis
+plugin/demo. The reusable framework story is documented separately in
+[`framework-plugin-boundary.md`](framework-plugin-boundary.md),
+[`h-rho-gamma-workflows.md`](h-rho-gamma-workflows.md), and
+[`how-to-add-analysis-plugin.md`](how-to-add-analysis-plugin.md). HToRhoGamma is
+the current worked plugin-like demonstrator; it is not the identity of the
+framework itself.
 
 The current goal is reproducibility and semantic clarity: read one local ROOT
 file, build a transparent photon plus `pi+ pi-` candidate, and print a compact
@@ -15,35 +23,35 @@ cutflow and candidate summary.
 The example accepts a local ROOT file path as its first positional argument:
 
 ```bash
-cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root
+cargo run -p nano-io --example h_rho_gamma -- /path/to/input.root
 ```
 
 If no positional path is given, it falls back to:
 
 ```bash
-NANO_SCOUTING_HRHOGAMMA_FILE=/path/to/input.root
+NANO_H_RHO_GAMMA_FILE=/path/to/input.root
 ```
 
 An optional second positional argument limits the number of processed events:
 
 ```bash
-cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100
+cargo run -p nano-io --example h_rho_gamma -- /path/to/input.root 100
 ```
 
 An optional third positional argument supplies a config path:
 
 ```bash
-cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
+cargo run -p nano-io --example h_rho_gamma -- /path/to/input.root 100 configs/h_rho_gamma.toml
 ```
 
 Optional CSV and ROOT output writes every accepted H candidate:
 
 ```bash
-cargo run -p nano-io --example scouting_h_rho_gamma -- /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv --root candidates.root
+cargo run -p nano-io --example h_rho_gamma -- /path/to/input.root 100 configs/h_rho_gamma.toml --csv candidates.csv --root candidates.root
 ```
 
 If no config path is supplied, the example loads
-`configs/scouting/h_rho_gamma.toml` by default. If that default file is absent,
+`configs/h_rho_gamma.toml` by default. If that default file is absent,
 it falls back to the built-in `HToRhoGammaCuts::zcountinghlt_naive()` values.
 If an explicit config path is supplied and cannot be read or validated, the
 example fails clearly instead of silently falling back.
@@ -56,31 +64,31 @@ paths.
 The wrapper script checks the input file exists and then runs the same example:
 
 ```bash
-scripts/demo_scouting_hrhogamma.sh /path/to/input.root
+scripts/demo_h_rho_gamma.sh /path/to/input.root
 ```
 
 With an event limit:
 
 ```bash
-scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100
+scripts/demo_h_rho_gamma.sh /path/to/input.root 100
 ```
 
 With an explicit config:
 
 ```bash
-scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml
+scripts/demo_h_rho_gamma.sh /path/to/input.root 100 configs/h_rho_gamma.toml
 ```
 
 With CSV output:
 
 ```bash
-scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv candidates.csv
+scripts/demo_h_rho_gamma.sh /path/to/input.root 100 configs/h_rho_gamma.toml --csv candidates.csv
 ```
 
 Or with the environment fallback:
 
 ```bash
-NANO_SCOUTING_HRHOGAMMA_FILE=/path/to/input.root scripts/demo_scouting_hrhogamma.sh
+NANO_H_RHO_GAMMA_FILE=/path/to/input.root scripts/demo_h_rho_gamma.sh
 ```
 
 ## Expected Output Sections
@@ -94,8 +102,8 @@ The example prints plain text. The important sections are:
 - `candidate_output`: either `none` or the CSV path supplied with `--csv`.
 - `branch_schema`: confirms the requested `nano_io::events_chunked` schema was
   built.
-- `branch_mapping`: documents the semantic scouting mapping used by this first
-  local-file version.
+- `branch_mapping`: documents the analysis-specific offline NanoAOD mapping
+  used by this local-file version.
 - `constants`: pion, rho, and Higgs reference masses.
 - `cuts`: the ZCountingHLT naive baseline cuts used by the example.
 - `processed_events`: number of events read.
@@ -154,13 +162,13 @@ physics-category implementation.
 First generate a candidate CSV:
 
 ```bash
-scripts/demo_scouting_hrhogamma.sh /path/to/input.root 100 configs/scouting/h_rho_gamma.toml --csv /tmp/scouting_hrhogamma_candidates.csv
+scripts/demo_h_rho_gamma.sh /path/to/input.root 100 configs/h_rho_gamma.toml --csv /tmp/h_rho_gamma_candidates.csv
 ```
 
 Then summarize and plot it:
 
 ```bash
-python scripts/plot_scouting_hrhogamma_csv.py /tmp/scouting_hrhogamma_candidates.csv --outdir /tmp/scouting_hrhogamma_plots
+python scripts/plot_h_rho_gamma_csv.py /tmp/h_rho_gamma_candidates.csv --outdir /tmp/h_rho_gamma_plots
 ```
 
 The script always writes:
@@ -209,20 +217,20 @@ rows.
 
 ## Branch Mapping
 
-The branch catalogue is in `configs/branches/scouting_run3.yaml`. The example reads `[analysis].branch_catalogue` and dynamically resolves semantic aliases:
+The analysis-specific branch mapping is in `configs/branches/h_rho_gamma_nanov15.yaml`. The example reads `[analysis].branch_catalogue` and dynamically resolves semantic aliases:
 
 ```text
-ScoutingPhoton.count -> nPhoton
-ScoutingPhoton.pt    -> Photon_pt
-ScoutingPhoton.eta   -> Photon_eta
-ScoutingPhoton.phi   -> Photon_phi
+Photon.count -> nPhoton
+Photon.pt    -> Photon_pt
+Photon.eta   -> Photon_eta
+Photon.phi   -> Photon_phi
 
-ScoutingChargedCandidate.count -> nPFCand
-ScoutingChargedCandidate.pt    -> PFCand_pt
-ScoutingChargedCandidate.eta   -> PFCand_eta
-ScoutingChargedCandidate.phi   -> PFCand_phi
-ScoutingChargedCandidate.mass  -> PFCand_mass
-ScoutingChargedCandidate.pdgId -> PFCand_pdgId
+ChargedCandidate.count -> nPFCand
+ChargedCandidate.pt    -> PFCand_pt
+ChargedCandidate.eta   -> PFCand_eta
+ChargedCandidate.phi   -> PFCand_phi
+ChargedCandidate.mass  -> PFCand_mass
+ChargedCandidate.pdgId -> PFCand_pdgId
 ```
 
 `Photon_mass` is absent in the local files, so photon mass is fixed to zero.
@@ -232,7 +240,7 @@ ScoutingChargedCandidate.pdgId -> PFCand_pdgId
 ## Baseline Cuts
 
 The baseline values are recorded in
-`configs/scouting/h_rho_gamma.toml` under
+`configs/h_rho_gamma.toml` under
 `[baseline.zcountinghlt_naive]`:
 
 ```text
@@ -254,7 +262,7 @@ remains self-contained when the default config is absent. At runtime, it loads t
 config by default and prints:
 
 ```text
-cut_source: configs/scouting/h_rho_gamma.toml [baseline.zcountinghlt_naive]
+cut_source: configs/h_rho_gamma.toml [baseline.zcountinghlt_naive]
 ```
 
 When the default config file is absent, the output instead reports:
@@ -303,10 +311,10 @@ human-readable `physics_summary.md` report.
 Resolve the DAS dataset through the existing `nano-cli`/`nano-das` path:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
+python scripts/run_h_rho_gamma_signal.py \
   --dataset /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir outputs/scouting_hrhogamma_signal \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal \
   --resolve-das \
   --xrootd \
   --download-remote \
@@ -317,20 +325,20 @@ python scripts/run_scouting_hrhogamma_signal.py \
 Run a small manifest or local-file test:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
-  --manifest outputs/scouting_hrhogamma_signal/manifest.json \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir outputs/scouting_hrhogamma_signal \
+python scripts/run_h_rho_gamma_signal.py \
+  --manifest outputs/h_rho_gamma_signal/manifest.json \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal \
   --max-files 1
 ```
 
 or:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
+python scripts/run_h_rho_gamma_signal.py \
   --local-files /path/to/file1.root /path/to/file2.root \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir outputs/scouting_hrhogamma_signal \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal \
   --max-events-per-file 100
 ```
 
@@ -338,10 +346,10 @@ Run every ROOT file in a local signal directory with optional GenPart truth
 truth-proxy validation:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib-cache-stage15 .venv/bin/python scripts/run_scouting_hrhogamma_signal.py \
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage15 .venv/bin/python scripts/run_h_rho_gamma_signal.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir /tmp/scouting_hrhogamma_signal_stage15_full_local \
+  --config configs/h_rho_gamma.toml \
+  --outdir /tmp/h_rho_gamma_signal_stage15_full_local \
   --all-files \
   --truth
 ```
@@ -350,10 +358,10 @@ The safe default is to process at most 5 files when `--max-files` is omitted.
 Use `--all-files` only when intentionally running the full resolved sample:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
-  --manifest outputs/scouting_hrhogamma_signal/manifest.json \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir outputs/scouting_hrhogamma_signal_full \
+python scripts/run_h_rho_gamma_signal.py \
+  --manifest outputs/h_rho_gamma_signal/manifest.json \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal_full \
   --all-files
 ```
 
@@ -362,10 +370,10 @@ For DAS/XRootD production, ask the script to cache remote files locally before
 processing:
 
 ```bash
-python scripts/run_scouting_hrhogamma_signal.py \
+python scripts/run_h_rho_gamma_signal.py \
   --dataset /GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir outputs/scouting_hrhogamma_signal_cached \
+  --config configs/h_rho_gamma.toml \
+  --outdir outputs/h_rho_gamma_signal_cached \
   --resolve-das \
   --xrootd \
   --download-remote \
@@ -415,7 +423,7 @@ Useful switches:
 The deterministic output layout is:
 
 ```text
-outputs/scouting_hrhogamma_signal/
+outputs/h_rho_gamma_signal/
 manifest.json
 production_summary.txt
 physics_summary.md
@@ -427,10 +435,10 @@ plots.stdout.txt
 plots.stderr.txt
 physics_report.stdout.txt
 physics_report.stderr.txt
-build_scouting_h_rho_gamma.stdout.txt
-build_scouting_h_rho_gamma.stderr.txt
-build_scouting_h_rho_gamma_csv_to_root.stdout.txt
-build_scouting_h_rho_gamma_csv_to_root.stderr.txt
+build_h_rho_gamma.stdout.txt
+build_h_rho_gamma.stderr.txt
+build_h_rho_gamma_csv_to_root.stdout.txt
+build_h_rho_gamma_csv_to_root.stderr.txt
 cache/
 file_000001_<hash>_<basename>.root
 per_file/
@@ -539,10 +547,10 @@ Stage 16A adds an explicit alternative truth strategy for the same accepted
 candidate reconstruction:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib-cache-stage16a .venv/bin/python scripts/run_scouting_hrhogamma_signal.py \
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16a .venv/bin/python scripts/run_h_rho_gamma_signal.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --config configs/scouting/h_rho_gamma.toml \
-  --outdir /tmp/scouting_hrhogamma_signal_stage16a_full_local \
+  --config configs/h_rho_gamma.toml \
+  --outdir /tmp/h_rho_gamma_signal_stage16a_full_local \
   --all-files \
   --truth \
   --truth-strategy hgamma-closure
@@ -641,18 +649,18 @@ content.
 Run the full local Stage 16B quality study from a completed Stage 16A output:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib-cache-stage16b .venv/bin/python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
-  --candidate-csv /tmp/scouting_hrhogamma_signal_stage16a_full_local/combined_candidates.csv \
-  --summary-json /tmp/scouting_hrhogamma_signal_stage16a_full_local/hgamma_closure_summary.json \
-  --outdir /tmp/scouting_hrhogamma_stage16b_quality_full
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16b .venv/bin/python scripts/analyze_h_rho_gamma_hgamma_closure_quality.py \
+  --candidate-csv /tmp/h_rho_gamma_signal_stage16a_full_local/combined_candidates.csv \
+  --summary-json /tmp/h_rho_gamma_signal_stage16a_full_local/hgamma_closure_summary.json \
+  --outdir /tmp/h_rho_gamma_stage16b_quality_full
 ```
 
 The script also supports CSV-only summary mode:
 
 ```bash
-python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
+python scripts/analyze_h_rho_gamma_hgamma_closure_quality.py \
   --candidate-csv path/to/combined_candidates.csv \
-  --outdir /tmp/scouting_hrhogamma_stage16b_quality
+  --outdir /tmp/h_rho_gamma_stage16b_quality
 ```
 
 It writes:
@@ -724,7 +732,7 @@ focus on useful ranges such as `80 < h_mass < 180` GeV and
 The plot policy lives in:
 
 ```text
-configs/scouting/h_rho_gamma_plotting.toml
+configs/h_rho_gamma_plotting.toml
 ```
 
 It defines named profiles:
@@ -738,7 +746,7 @@ signal_window
 The diagnostic quality categories live in:
 
 ```text
-configs/scouting/h_rho_gamma_quality_categories.toml
+configs/h_rho_gamma_quality_categories.toml
 ```
 
 The initial categories are:
@@ -757,14 +765,14 @@ quality_tight
 Run the profile-aware Stage 16C study with:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib-cache-stage16c .venv/bin/python scripts/analyze_hrhogamma_hgamma_closure_quality.py \
-  --candidate-csv /tmp/scouting_hrhogamma_signal_stage16a_full_local/combined_candidates.csv \
-  --summary-json /tmp/scouting_hrhogamma_signal_stage16a_full_local/hgamma_closure_summary.json \
-  --outdir /tmp/scouting_hrhogamma_stage16c_quality_plotting_full \
-  --plot-config configs/scouting/h_rho_gamma_plotting.toml \
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage16c .venv/bin/python scripts/analyze_h_rho_gamma_hgamma_closure_quality.py \
+  --candidate-csv /tmp/h_rho_gamma_signal_stage16a_full_local/combined_candidates.csv \
+  --summary-json /tmp/h_rho_gamma_signal_stage16a_full_local/hgamma_closure_summary.json \
+  --outdir /tmp/h_rho_gamma_stage16c_quality_plotting_full \
+  --plot-config configs/h_rho_gamma_plotting.toml \
   --plot-profile physics_focus \
   --write-full-range-sanity \
-  --quality-config configs/scouting/h_rho_gamma_quality_categories.toml
+  --quality-config configs/h_rho_gamma_quality_categories.toml
 ```
 
 The output adds:
@@ -827,10 +835,10 @@ Run a small diagnostic over the first local files and at most 1000 candidate
 rows:
 
 ```bash
-python scripts/diagnose_hrhogamma_pion_truth_proxy.py \
+python scripts/diagnose_h_rho_gamma_pion_truth_proxy.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --candidate-csv /tmp/scouting_hrhogamma_signal_stage15_full_local/combined_candidates.csv \
-  --outdir /tmp/scouting_hrhogamma_pion_truth_diag_small \
+  --candidate-csv /tmp/h_rho_gamma_signal_stage15_full_local/combined_candidates.csv \
+  --outdir /tmp/h_rho_gamma_pion_truth_diag_small \
   --max-files 2 \
   --max-candidates 1000
 ```
@@ -838,17 +846,17 @@ python scripts/diagnose_hrhogamma_pion_truth_proxy.py \
 Run the full local signal diagnostic with matplotlib plots:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib-cache-stage15b .venv/bin/python scripts/diagnose_hrhogamma_pion_truth_proxy.py \
+MPLCONFIGDIR=/tmp/matplotlib-cache-stage15b .venv/bin/python scripts/diagnose_h_rho_gamma_pion_truth_proxy.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --candidate-csv /tmp/scouting_hrhogamma_signal_stage15_full_local/combined_candidates.csv \
-  --outdir /tmp/scouting_hrhogamma_pion_truth_diag_full \
+  --candidate-csv /tmp/h_rho_gamma_signal_stage15_full_local/combined_candidates.csv \
+  --outdir /tmp/h_rho_gamma_pion_truth_diag_full \
   --all-files
 ```
 
 The Python runner builds and calls the Rust per-file diagnostic example:
 
 ```bash
-target/debug/examples/scouting_h_rho_gamma_pion_truth_diag \
+target/debug/examples/h_rho_gamma_pion_truth_diag \
   input.root \
   --candidate-csv selected_candidates.csv \
   --out-json per_file/file_000001.summary.json \
@@ -922,9 +930,9 @@ candidate reconstruction, cuts, CSV production, ROOT writing, or plotting.
 Run a small local survey:
 
 ```bash
-python scripts/survey_hrhogamma_genpart_topology.py \
+python scripts/survey_h_rho_gamma_genpart_topology.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --outdir /tmp/scouting_hrhogamma_genpart_survey_small \
+  --outdir /tmp/h_rho_gamma_genpart_survey_small \
   --max-files 2 \
   --max-events-per-file 1000
 ```
@@ -932,16 +940,16 @@ python scripts/survey_hrhogamma_genpart_topology.py \
 Run the full local signal directory:
 
 ```bash
-python scripts/survey_hrhogamma_genpart_topology.py \
+python scripts/survey_h_rho_gamma_genpart_topology.py \
   --local-dir /home/lzhang/lxplus/scouting/nano_data/GluGluHtoRhoG_Par-M-125 \
-  --outdir /tmp/scouting_hrhogamma_genpart_survey_full \
+  --outdir /tmp/h_rho_gamma_genpart_survey_full \
   --all-files
 ```
 
 The runner builds and calls:
 
 ```bash
-target/debug/examples/scouting_h_rho_gamma_genpart_survey \
+target/debug/examples/h_rho_gamma_genpart_survey \
   input.root [max-events] \
   --out-json per_file/file_000001.summary.json \
   --out-text per_file/file_000001.summary.txt \
@@ -963,7 +971,7 @@ Useful switches:
 The output layout is:
 
 ```text
-/tmp/scouting_hrhogamma_genpart_survey_full/
+/tmp/h_rho_gamma_genpart_survey_full/
 genpart_topology_summary.txt
 genpart_topology_summary.json
 per_file/
@@ -992,8 +1000,8 @@ the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
 ## Known Limitations
 
 - This runs on NanoAODv15-like signal MC with ordinary `Photon_*` and
-  `PFCand_*` collections plus scouting trigger bits; it is not confirmed to be
-  reduced HLT scouting object content.
+  `PFCand_*` collections. It is an offline NanoAOD workflow, not a reduced HLT
+  object workflow.
 - Truth matching is a preliminary GenPart sanity check, not an efficiency or
   resolution model.
 - The GenPart topology survey is diagnostic; it does not yet implement the
@@ -1027,4 +1035,5 @@ the Higgs-descendant photon plus nearest final-state `pi+ pi-` proxies.
 - Choose the next truth-validation stage from the Stage 15B diagnostic result:
   photon-only validation, charged-hadron proxy matching, PackedGenPart survey,
   or a reconstruction-quality study.
-- Extend the branch catalogue when true scouting-object files are available.
+- Extend the branch mapping when additional offline NanoAOD branch families are
+  confirmed in the input sample.

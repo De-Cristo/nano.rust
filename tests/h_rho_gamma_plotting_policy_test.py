@@ -8,22 +8,22 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-POLICY_SCRIPT = REPO_ROOT / "scripts" / "hrhogamma_plotting_policy.py"
-QUALITY_SCRIPT = REPO_ROOT / "scripts" / "analyze_hrhogamma_hgamma_closure_quality.py"
+POLICY_SCRIPT = REPO_ROOT / "scripts" / "h_rho_gamma_plotting_policy.py"
+QUALITY_SCRIPT = REPO_ROOT / "scripts" / "analyze_h_rho_gamma_hgamma_closure_quality.py"
 FIXTURE = (
     REPO_ROOT
     / "tests"
     / "fixtures"
-    / "scouting_hrhogamma_candidates_hgamma_quality_small.csv"
+    / "h_rho_gamma_candidates_hgamma_quality_small.csv"
 )
-PLOT_CONFIG = REPO_ROOT / "configs" / "scouting" / "h_rho_gamma_plotting.toml"
-QUALITY_CONFIG = REPO_ROOT / "configs" / "scouting" / "h_rho_gamma_quality_categories.toml"
+PLOT_CONFIG = REPO_ROOT / "configs" / "h_rho_gamma_plotting.toml"
+QUALITY_CONFIG = REPO_ROOT / "configs" / "h_rho_gamma_quality_categories.toml"
 
 
-SPEC = importlib.util.spec_from_file_location("hrhogamma_plotting_policy", POLICY_SCRIPT)
+SPEC = importlib.util.spec_from_file_location("h_rho_gamma_plotting_policy", POLICY_SCRIPT)
 plotting_policy = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
-sys.modules["hrhogamma_plotting_policy"] = plotting_policy
+sys.modules["h_rho_gamma_plotting_policy"] = plotting_policy
 SPEC.loader.exec_module(plotting_policy)
 
 QUALITY_SPEC = importlib.util.spec_from_file_location("hgamma_quality", QUALITY_SCRIPT)

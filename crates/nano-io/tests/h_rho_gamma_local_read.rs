@@ -5,11 +5,11 @@ use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
 
 #[test]
-fn reads_scouting_nanoaod_v15_local_file_if_present() {
-    let local_signal = match env::var("NANO_SCOUTING_HRHOGAMMA_FILE") {
+fn reads_h_rho_gamma_nanoaod_v15_local_file_if_present() {
+    let local_signal = match env::var("NANO_H_RHO_GAMMA_FILE") {
         Ok(val) => val,
         Err(_) => {
-            eprintln!("SKIP: NANO_SCOUTING_HRHOGAMMA_FILE not set");
+            eprintln!("SKIP: NANO_H_RHO_GAMMA_FILE not set");
             return;
         }
     };
@@ -41,7 +41,7 @@ fn reads_scouting_nanoaod_v15_local_file_if_present() {
     let mut minus_pions = 0_usize;
 
     for event in events_chunked(path, &schema, 10)
-        .expect("open local scouting NanoAOD-like file")
+        .expect("open local offline NanoAOD-like file")
         .take(10)
     {
         let event = event.expect("read event");
@@ -82,6 +82,6 @@ fn reads_scouting_nanoaod_v15_local_file_if_present() {
 
     assert_eq!(rows, 10, "expected to read 10 events");
     eprintln!(
-        "local scouting NanoAODv15-like read: rows={rows}, +211={plus_pions}, -211={minus_pions}"
+        "local offline NanoAODv15-like read: rows={rows}, +211={plus_pions}, -211={minus_pions}"
     );
 }

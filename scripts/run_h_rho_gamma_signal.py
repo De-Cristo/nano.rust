@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manifest-driven H->rho gamma scouting signal production helper."""
+"""Manifest-driven H->rho gamma offline NanoAOD production helper."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ DEFAULT_DATASET = (
     "/GluGluHtoRhoG_Par-M-125_TuneCP5_13p6TeV_powheg-pythia8-evtgen/"
     "RunIII2024Summer24NanoAODv15-150X_mcRun3_2024_realistic_v2-v2/NANOAODSIM"
 )
-DEFAULT_CONFIG = Path("configs/scouting/h_rho_gamma.toml")
-DEFAULT_OUTDIR = Path("outputs/scouting_hrhogamma_signal")
+DEFAULT_CONFIG = Path("configs/h_rho_gamma.toml")
+DEFAULT_OUTDIR = Path("outputs/h_rho_gamma_signal")
 DEFAULT_SAFE_MAX_FILES = 5
 DEFAULT_DOWNLOAD_TOOL = "xrdcp"
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 3600
@@ -89,7 +89,7 @@ class FileResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the HToRhoGamma scouting demo over a signal manifest."
+        description="Run the HToRhoGamma offline NanoAOD demo over a signal manifest."
     )
     parser.add_argument("--dataset", default=DEFAULT_DATASET, help="DAS dataset name")
     parser.add_argument("--manifest", type=Path, help="existing nano-das manifest JSON")
@@ -331,10 +331,10 @@ def prepare_binaries(args: argparse.Namespace, outdir: Path) -> Binaries:
     if args.use_cargo_run:
         return Binaries(None, None, "cargo-run")
     mode = target_profile(args)
-    reco = None if args.plots_only or args.report_only else build_example("scouting_h_rho_gamma", args, outdir)
+    reco = None if args.plots_only or args.report_only else build_example("h_rho_gamma", args, outdir)
     csv_to_root = None
     if not args.no_root and not args.no_csv:
-        csv_to_root = build_example("scouting_h_rho_gamma_csv_to_root", args, outdir)
+        csv_to_root = build_example("h_rho_gamma_csv_to_root", args, outdir)
     return Binaries(reco, csv_to_root, mode)
 
 
@@ -547,13 +547,13 @@ def reco_command(
     csv_path: Path,
 ) -> list[str]:
     if args.use_cargo_run:
-        command = ["cargo", "run", "-p", "nano-io", "--example", "scouting_h_rho_gamma"]
+        command = ["cargo", "run", "-p", "nano-io", "--example", "h_rho_gamma"]
         if args.release:
             command.append("--release")
         command.extend(["--", run_input])
     else:
         if binaries.reco is None:
-            raise ValueError("scouting_h_rho_gamma binary was not prepared")
+            raise ValueError("h_rho_gamma binary was not prepared")
         command = [str(binaries.reco), run_input]
 
     if args.max_events_per_file is not None:
@@ -698,14 +698,14 @@ def write_combined_root(
             "-p",
             "nano-io",
             "--example",
-            "scouting_h_rho_gamma_csv_to_root",
+            "h_rho_gamma_csv_to_root",
         ]
         if args.release:
             command.append("--release")
         command.extend(["--", str(combined_csv), str(combined_root)])
     else:
         if binaries.csv_to_root is None:
-            raise ValueError("scouting_h_rho_gamma_csv_to_root binary was not prepared")
+            raise ValueError("h_rho_gamma_csv_to_root binary was not prepared")
         command = [str(binaries.csv_to_root), str(combined_csv), str(combined_root)]
     result = subprocess.run(
         command,
@@ -727,7 +727,7 @@ def write_combined_root(
 def run_plots(args: argparse.Namespace, combined_csv: Path, plots_dir: Path) -> str:
     command = [
         sys.executable,
-        str(repo_root() / "scripts" / "plot_scouting_hrhogamma_csv.py"),
+        str(repo_root() / "scripts" / "plot_h_rho_gamma_csv.py"),
         str(combined_csv),
         "--outdir",
         str(plots_dir),
@@ -928,7 +928,7 @@ def write_physics_report(
     )
     command = [
         sys.executable,
-        str(repo_root() / "scripts" / "write_scouting_hrhogamma_report.py"),
+        str(repo_root() / "scripts" / "write_h_rho_gamma_report.py"),
         "--csv",
         str(combined_csv),
         "--outdir",

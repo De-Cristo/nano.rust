@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::genpart_survey::GenPartRecord;
-use crate::scouting_hrhogamma::delta_r;
+use crate::h_rho_gamma::delta_r;
 
 pub const THRESHOLDS: [f64; 5] = [0.05, 0.10, 0.20, 0.30, 0.50];
 pub const POOLS: [&str; 5] = [

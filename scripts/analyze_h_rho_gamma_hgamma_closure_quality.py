@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import hrhogamma_plotting_policy as plotting_policy
+import h_rho_gamma_plotting_policy as plotting_policy
 
 
 EVENT_COLUMNS = ("run", "luminosityBlock", "event")

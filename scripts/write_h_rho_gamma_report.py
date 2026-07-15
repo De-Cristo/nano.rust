@@ -649,7 +649,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
     lines = [
         f"# {args.title}",
         "",
-        "This is a signal-sample sanity report for the HToRhoGamma scouting-oriented demonstrator. It is not a final analysis result.",
+        "This is a signal-sample sanity report for the HToRhoGamma offline NanoAOD demonstrator. It is not a final analysis result.",
         "",
         "## Dataset And Command",
         "",
@@ -721,7 +721,7 @@ def build_report(args: argparse.Namespace, rows: list[dict[str, str]], fieldname
             "## Known Limitations",
             "",
             "- Native root:// streaming is not implemented; DAS production uses xrdcp cache staging.",
-            "- NanoAODv15-like signal MC is not identical to true reduced Run-3 scouting object collections.",
+            "- NanoAODv15-like signal MC is not identical to a reduced object collection.",
             "- Matplotlib may be missing in the current environment.",
             "- The report is candidate-level and reconstruction-level only.",
             "- Truth matching is preliminary and does not define final signal efficiency.",

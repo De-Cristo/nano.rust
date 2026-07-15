@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_OUTDIR = Path("outputs/scouting_hrhogamma_genpart_survey")
+DEFAULT_OUTDIR = Path("outputs/h_rho_gamma_genpart_survey")
 DEFAULT_SAFE_MAX_FILES = 5
 COUNT_KEYS = (
     "processed_events",
@@ -49,7 +49,7 @@ class InputFile:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Survey GenPart topology for the HToRhoGamma scouting signal sample."
+        description="Survey GenPart topology for the HToRhoGamma offline NanoAOD signal sample."
     )
     parser.add_argument("--local-dir", type=Path, required=True)
     parser.add_argument("--local-glob", default="*.root")
@@ -96,11 +96,11 @@ def select_inputs(
 
 def survey_binary(release: bool) -> Path:
     profile = "release" if release else "debug"
-    return repo_root() / "target" / profile / "examples" / "scouting_h_rho_gamma_genpart_survey"
+    return repo_root() / "target" / profile / "examples" / "h_rho_gamma_genpart_survey"
 
 
 def build_binary(release: bool) -> Path:
-    command = ["cargo", "build", "-p", "nano-io", "--example", "scouting_h_rho_gamma_genpart_survey"]
+    command = ["cargo", "build", "-p", "nano-io", "--example", "h_rho_gamma_genpart_survey"]
     if release:
         command.append("--release")
     result = subprocess.run(

@@ -67,7 +67,7 @@ impl Options {
         let input = args
             .next()
             .map(PathBuf::from)
-            .ok_or("usage: scouting_h_rho_gamma_pion_truth_diag <input.root> [max-events] --candidate-csv candidates.csv [--out-json path] [--out-text path] [--max-candidates N]")?;
+            .ok_or("usage: h_rho_gamma_pion_truth_diag <input.root> [max-events] --candidate-csv candidates.csv [--out-json path] [--out-text path] [--max-candidates N]")?;
         let mut max_events = None;
         let mut candidate_csv = None;
         let mut out_json = None;

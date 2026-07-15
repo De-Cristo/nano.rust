@@ -7,18 +7,18 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REPORT_SCRIPT = REPO_ROOT / "scripts" / "write_scouting_hrhogamma_report.py"
-PRODUCTION_SCRIPT = REPO_ROOT / "scripts" / "run_scouting_hrhogamma_signal.py"
-FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_small.csv"
-TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_small.csv"
-TRUTH_PROXY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
+REPORT_SCRIPT = REPO_ROOT / "scripts" / "write_h_rho_gamma_report.py"
+PRODUCTION_SCRIPT = REPO_ROOT / "scripts" / "run_h_rho_gamma_signal.py"
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_small.csv"
+TRUTH_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_truth_small.csv"
+TRUTH_PROXY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_truth_proxy_small.csv"
 HGAMMA_CLOSURE_FIXTURE = (
-    REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_hgamma_closure_small.csv"
+    REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_hgamma_closure_small.csv"
 )
-PER_FILE_DIR = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_signal" / "per_file"
+PER_FILE_DIR = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_signal" / "per_file"
 
 
-class ScoutingHToRhoGammaReportTest(unittest.TestCase):
+class HToRhoGammaReportTest(unittest.TestCase):
     def test_writes_physics_summary_with_statistics_windows_and_plot_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp) / "signal"
@@ -38,7 +38,7 @@ class ScoutingHToRhoGammaReportTest(unittest.TestCase):
                     "--outdir",
                     str(outdir),
                     "--config",
-                    "configs/scouting/h_rho_gamma.toml",
+                    "configs/h_rho_gamma.toml",
                     "--dataset",
                     "/Test/HToRhoGamma/NANOAODSIM",
                     "--selected-files",
@@ -54,7 +54,7 @@ class ScoutingHToRhoGammaReportTest(unittest.TestCase):
                     "--combined-root",
                     str(outdir / "combined_candidates.root"),
                     "--command-line",
-                    "python scripts/run_scouting_hrhogamma_signal.py --local-files a.root",
+                    "python scripts/run_h_rho_gamma_signal.py --local-files a.root",
                 ],
                 cwd=REPO_ROOT,
                 text=True,

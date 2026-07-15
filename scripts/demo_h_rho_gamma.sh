@@ -3,8 +3,8 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-usage: scripts/demo_scouting_hrhogamma.sh <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]
-   or: NANO_SCOUTING_HRHOGAMMA_FILE=<input.root> scripts/demo_scouting_hrhogamma.sh [--csv candidates.csv] [--root candidates.root]
+usage: scripts/demo_h_rho_gamma.sh <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]
+   or: NANO_H_RHO_GAMMA_FILE=<input.root> scripts/demo_h_rho_gamma.sh [--csv candidates.csv] [--root candidates.root]
 USAGE
 }
 
@@ -55,7 +55,7 @@ if (( ${#positional[@]} > 3 )); then
   exit 2
 fi
 
-input="${positional[0]:-${NANO_SCOUTING_HRHOGAMMA_FILE:-}}"
+input="${positional[0]:-${NANO_H_RHO_GAMMA_FILE:-}}"
 max_events="${positional[1]:-}"
 config="${positional[2]:-}"
 
@@ -69,7 +69,7 @@ if [[ ! -f "$input" ]]; then
   exit 1
 fi
 
-cmd=(cargo run -p nano-io --example scouting_h_rho_gamma -- "$input")
+cmd=(cargo run -p nano-io --example h_rho_gamma -- "$input")
 if [[ -n "$max_events" ]]; then
   cmd+=("$max_events")
 fi

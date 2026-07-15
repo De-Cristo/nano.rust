@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "diagnose_hrhogamma_pion_truth_proxy.py"
-FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scouting_hrhogamma_candidates_truth_proxy_small.csv"
+SCRIPT = REPO_ROOT / "scripts" / "diagnose_h_rho_gamma_pion_truth_proxy.py"
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "h_rho_gamma_candidates_truth_proxy_small.csv"
 
 SPEC = importlib.util.spec_from_file_location("pion_truth_diag", SCRIPT)
 pion_truth_diag = importlib.util.module_from_spec(SPEC)

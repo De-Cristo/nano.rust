@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use nano_core::{BranchSchema, BranchSpec, BranchType};
 use nano_io::events_chunked;
-use nano_io::scouting_hrhogamma::{
+use nano_io::h_rho_gamma::{
     hgamma_closure_truth_objects, load_branch_mapping, match_reco_to_hgamma_closure,
     match_reco_to_truth_proxy, reconstruct_event, EventInputs, GenParticle, HCand,
     HToRhoGammaBranchMapping, HToRhoGammaCuts, HgammaClosureCounters, HgammaClosureEventFlags,
@@ -14,8 +14,8 @@ use nano_io::scouting_hrhogamma::{
 };
 use nano_io::writer::{write_events, OutputBranch};
 
-const ENV_INPUT: &str = "NANO_SCOUTING_HRHOGAMMA_FILE";
-const DEFAULT_CONFIG_PATH: &str = "configs/scouting/h_rho_gamma.toml";
+const ENV_INPUT: &str = "NANO_H_RHO_GAMMA_FILE";
+const DEFAULT_CONFIG_PATH: &str = "configs/h_rho_gamma.toml";
 const BASELINE_TABLE: &str = "[baseline.zcountinghlt_naive]";
 const CHUNK_SIZE: usize = 1024;
 const MAX_PRINTED_CANDIDATES: usize = 10;
@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let (cuts, cut_source, mapping, mapping_source) = load_config(&options)?;
-    let schema = scouting_schema(&mapping, options.truth)?;
+    let schema = h_rho_gamma_schema(&mapping, options.truth)?;
     let mut root_writer = options
         .root_path
         .as_deref()
@@ -164,7 +164,7 @@ impl Options {
 
         if positional.len() > 3 {
             return Err(
-                "usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]".into(),
+                "usage: h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root]".into(),
             );
         }
 
@@ -224,7 +224,7 @@ impl Options {
 }
 
 fn print_usage() {
-    println!("usage: scouting_h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root] [--truth] [--truth-strategy topology-proxy|hgamma-closure]");
+    println!("usage: h_rho_gamma <input.root> [max-events] [config.toml] [--csv candidates.csv] [--root candidates.root] [--truth] [--truth-strategy topology-proxy|hgamma-closure]");
     println!("or set {ENV_INPUT}=<input.root>");
     println!("default config: {DEFAULT_CONFIG_PATH}");
 }
@@ -282,11 +282,11 @@ fn load_config(
         HToRhoGammaCuts::zcountinghlt_naive(),
         "built-in zcountinghlt_naive fallback".to_string(),
         HToRhoGammaBranchMapping::zcountinghlt_naive(),
-        "built-in scouting_run3 fallback".to_string(),
+        "built-in h_rho_gamma_nanov15 fallback".to_string(),
     ))
 }
 
-fn scouting_schema(
+fn h_rho_gamma_schema(
     mapping: &HToRhoGammaBranchMapping,
     truth: bool,
 ) -> Result<BranchSchema, Box<dyn Error>> {
